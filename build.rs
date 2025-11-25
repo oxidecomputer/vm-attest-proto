@@ -10,14 +10,16 @@ use std::path::{self, Path, PathBuf};
 
 /// Execute one of the `pki-playground` commands to generate part of the PKI
 /// used for testing.
-fn pki_gen_cmd(command: &str, cfg: Option<&Path>) -> Result<()> {
-    let mut cmd = std::process::Command::new("pki-playground");
-
-    if let Some(cfg) = cfg {
-        cmd.arg("--config");
-        cmd.arg(cfg);
+fn pki_gen_cmd(command: &str, cfg: &Path) -> Result<()> {
+    if !fs::exists(cfg).with_context(|| {
+        format!("failed to determin if file exists: {}", cfg.display())
+    })? {
+        return Err(anyhow!("missing PKI config file: {}", cfg.display()));
     }
 
+    let mut cmd = std::process::Command::new("pki-playground");
+    cmd.arg("--config");
+    cmd.arg(cfg);
     cmd.arg(command);
     let output = cmd
         .output()
@@ -40,6 +42,12 @@ fn pki_gen_cmd(command: &str, cfg: Option<&Path>) -> Result<()> {
 /// Execute one of the `attest-mock` commands to generate mock input data used
 /// for testing.
 fn attest_gen_cmd(command: &str, input: &Path, output: &str) -> Result<()> {
+    if !fs::exists(input).with_context(|| {
+        format!("failed to determin if file exists: {}", input.display())
+    })? {
+        return Err(anyhow!("missing config file: {}", input.display()));
+    }
+
     // attest-mock "input" "cmd" > "output"
     let mut cmd = std::process::Command::new("attest-mock");
     cmd.arg(input).arg(command);
@@ -57,7 +65,7 @@ fn attest_gen_cmd(command: &str, input: &Path, output: &str) -> Result<()> {
     }
 }
 
-fn path_to_conf(mut file: &File, path: &Path, name: &str) -> Result<()> {
+fn write_path_to_conf(mut file: &File, path: &Path, name: &str) -> Result<()> {
     if !fs::exists(path).with_context(|| {
         format!("checking existance of file: {}", path.display())
     })? {
@@ -73,108 +81,67 @@ fn path_to_conf(mut file: &File, path: &Path, name: &str) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let start_dir = env::current_dir().context("get current dir")?;
-    let start_dir =
-        path::absolute(start_dir).context("current_dir to absolute")?;
+    let cwd = env::current_dir().context("get current dir")?;
+    let mut cwd = path::absolute(cwd).context("current_dir to absolute")?;
 
-    let mut test_data_dir = start_dir.clone();
-    test_data_dir.push("test-data");
-    let test_data_dir = test_data_dir;
-
-    let mut pki_cfg = test_data_dir.clone();
-    pki_cfg.push("config.kdl");
-    let pki_cfg = pki_cfg;
-    if !fs::exists(&pki_cfg).with_context(|| {
-        format!("required file doesn't exist: {}", pki_cfg.display())
-    })? {
-        return Err(anyhow!("missing PKI config file: {}", pki_cfg.display()));
-    }
-
-    let mut log_cfg = test_data_dir.clone();
-    log_cfg.push("log.kdl");
-    let log_cfg = log_cfg;
-    if !fs::exists(&log_cfg).with_context(|| {
-        format!("required file doesn't exist: {}", log_cfg.display())
-    })? {
-        return Err(anyhow!(
-            "missing measurement log config file: {}",
-            log_cfg.display()
-        ));
-    }
-
-    let mut corim_cfg = test_data_dir.clone();
-    corim_cfg.push("corim.kdl");
-    let corim_cfg = corim_cfg;
-    if !fs::exists(&corim_cfg).with_context(|| {
-        format!("required file doesn't exist: {}", corim_cfg.display())
-    })? {
-        return Err(anyhow!(
-            "missing reference integrity measurement config file: {}",
-            corim_cfg.display()
-        ));
-    }
-
-    let out_dir =
+    // output directory where we put:
+    // generated test inputs
+    let mut out =
         PathBuf::from(env::var("OUT_DIR").context("Could not get OUT_DIR")?);
+    env::set_current_dir(&out)
+        .with_context(|| format!("chdir to {}", out.display()))?;
 
-    env::set_current_dir(&out_dir)
-        .with_context(|| format!("chdir to {}", out_dir.display()))?;
+    // paths consumed by the library as const `&str`s go here
+    out.push("config.rs");
+    let config_out = File::create(&out)
+        .with_context(|| format!("creating {}", out.display()))?;
+    out.pop();
 
+    cwd.push("test-data");
+    cwd.push("config.kdl");
+    let mut pki_cfg = cwd;
     // generate keys
-    pki_gen_cmd("generate-key-pairs", Some(&pki_cfg))?;
-
-    let mut attestation_signer = out_dir.clone();
-    // this file name is chosen by `pki-playground`
-    attestation_signer.push("test-alias.key.pem");
-    let attestation_signer = attestation_signer;
-
-    let dest_path = out_dir.join("config.rs");
-    let config_out = File::create(&dest_path)
-        .with_context(|| format!("creating {}", dest_path.display()))?;
-
-    path_to_conf(&config_out, &attestation_signer, "ATTESTATION_SIGNER")
+    pki_gen_cmd("generate-key-pairs", &pki_cfg)?;
+    out.push("test-alias.key.pem");
+    write_path_to_conf(&config_out, &out, "ATTESTATION_SIGNER")
         .context("write variable w/ path to attestation signing key")?;
+    out.pop();
 
     // generate certs
-    pki_gen_cmd("generate-certificates", Some(&pki_cfg))?;
-    let mut pki_root = out_dir.clone();
-    pki_root.push("test-root.cert.pem");
-    let pki_root = pki_root;
-
-    path_to_conf(&config_out, &pki_root, "PKI_ROOT")
+    pki_gen_cmd("generate-certificates", &pki_cfg)?;
+    out.push("test-root.cert.pem");
+    write_path_to_conf(&config_out, &out, "PKI_ROOT")
         .context("write PKI_ROOT const str to config.rs")?;
+    out.pop();
 
-    // generate cert chains / lists
-    pki_gen_cmd("generate-certificate-lists", Some(&pki_cfg))?;
-    let mut signer_pkipath = out_dir.clone();
-    signer_pkipath.push("test-alias.certlist.pem");
-    let signer_pkipath = signer_pkipath;
-
-    path_to_conf(&config_out, &signer_pkipath, "SIGNER_PKIPATH")
+    // generate cert chains
+    pki_gen_cmd("generate-certificate-lists", &pki_cfg)?;
+    pki_cfg.pop();
+    out.push("test-alias.certlist.pem");
+    write_path_to_conf(&config_out, &out, "SIGNER_PKIPATH")
         .context("write variable w/ path to attestation signing key")?;
+    out.pop();
 
     // generate measurement log
+    let mut log_cfg = pki_cfg;
+    log_cfg.push("log.kdl");
     attest_gen_cmd("log", &log_cfg, "log.bin")?;
-    let mut log = out_dir.clone();
-    log.push("log.bin");
-    let log = log;
+    log_cfg.pop();
 
-    path_to_conf(&config_out, &log, "LOG")
+    out.push("log.bin");
+    write_path_to_conf(&config_out, &out, "LOG")
         .context("write variable w/ path to attestation signing key")?;
+    out.pop();
 
     // generate the corpus of reference measurements
+    let mut corim_cfg = log_cfg;
+    corim_cfg.push("corim.kdl");
     attest_gen_cmd("corim", &corim_cfg, "corim.cbor")?;
 
-    let mut corim = out_dir.clone();
-    corim.push("corim.cbor");
-    let corim = corim;
-
-    path_to_conf(&config_out, &corim, "CORIM").context(
+    out.push("corim.cbor");
+    write_path_to_conf(&config_out, &out, "CORIM").context(
         "write variable w/ path to reference integrity measurements",
     )?;
-
-    std::env::set_current_dir(start_dir)
-        .context("restore current dir to original")?;
 
     Ok(())
 }
