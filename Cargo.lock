@@ -1322,10 +1322,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "attest-data",
+ "const-oid",
  "dice-verifier",
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hubpack",
+ "rats-corim",
  "sha2",
  "thiserror",
  "x509-cert",
