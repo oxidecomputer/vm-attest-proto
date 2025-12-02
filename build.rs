@@ -137,11 +137,21 @@ fn main() -> Result<()> {
     let mut corim_cfg = log_cfg;
     corim_cfg.push("corim.kdl");
     attest_gen_cmd("corim", &corim_cfg, "corim.cbor")?;
+    corim_cfg.pop();
 
     out.push("corim.cbor");
     write_path_to_conf(&config_out, &out, "CORIM").context(
         "write variable w/ path to reference integrity measurements",
     )?;
+    out.pop();
+
+    let mut vm_instance_cfg = corim_cfg;
+    vm_instance_cfg.push("vm-instance-cfg.json");
+    write_path_to_conf(&config_out, &vm_instance_cfg, "VM_INSTANCE_CFG")
+        .context(
+            "write variable w/ path to data attested by the InstanceRoT",
+        )?;
+    vm_instance_cfg.pop();
 
     Ok(())
 }

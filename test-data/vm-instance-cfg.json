@@ -1,0 +1,9 @@
+{
+    "//comment": "This structure / log is produced by the AttestMock that mocks",
+    "//comment": "the behavior expected of the propolis process.",
+    "uuid": "db5bf54c-48c5-4455-a1e1-6c7dfc26e351",
+    "image-digest": {
+        "algorithm": "sha-256",
+        "digest" : "be4df4e085175f3de0c8ac4837e1c2c9a34e8983209dac6b549e94154f7cdd9c"
+    }
+}
