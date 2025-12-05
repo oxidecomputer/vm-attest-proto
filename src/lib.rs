@@ -40,6 +40,7 @@ impl AsRef<[u8]> for Nonce {
 #[derive(Debug, PartialEq)]
 pub enum RotType {
     OxideHardware,
+    OxideInstance,
 }
 
 #[allow(dead_code)]
@@ -57,17 +58,23 @@ pub struct MeasurementLog {
 /// A representation of the measurement log produced by the VM instance RoT.
 /// This is the log of measurements that propolis mixes into the data provided
 /// to the attestation produced by the `RotType::OxideHardware`.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct VmInstanceConf {
     pub uuid: Uuid,
     #[serde(rename = "image-digest")]
     pub image_digest: Measurement,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Measurement {
     pub algorithm: String,
     pub digest: String,
+}
+
+#[allow(dead_code)]
+pub struct CertChain {
+    rot: RotType,
+    pki_path: PkiPath,
 }
 
 /// An interface for obtaining an attestation from the Oxide RoT
@@ -85,13 +92,13 @@ pub trait AttestationSigner {
         &self,
         nonce: &Nonce,
         user_data: &[u8],
-    ) -> Result<Vec<Attestation>, Self::Error>;
+    ) -> Result<Attestation, Self::Error>;
 
     /// Return all relevant measurement logs, in order of concatenation.
     fn get_measurement_logs(&self) -> Result<Vec<MeasurementLog>, Self::Error>;
 
     /// Return the cert chain for the given RotType.
-    fn get_cert_chain(&self, rot: RotType) -> Result<PkiPath, Self::Error>;
+    fn get_cert_chains(&self) -> Result<Vec<CertChain>, Self::Error>;
 }
 
 /// Errors returned when trying to sign an attestation
@@ -105,6 +112,8 @@ pub enum AttestMockError {
     OxideAttestDataError(#[from] OxAttestDataError),
     #[error("Rot has no cert chain")]
     NoCertChain,
+    #[error("error converting instance log")]
+    VmInstanceMocData(#[from] serde_json::Error),
 }
 
 /// This type mocks the `propolis` process that backs a VM.
@@ -131,30 +140,27 @@ impl AttestationSigner for AttestMock {
         &self,
         nonce: &Nonce,
         user_data: &[u8],
-    ) -> Result<Vec<Attestation>, Self::Error> {
+    ) -> Result<Attestation, Self::Error> {
+        let instance_cfg = serde_json::to_string(&self.log)?;
+
         let mut msg = Sha256::new();
-        // msg.update w/
-        // - attestations from platform RoTs
-        msg.update(self.log.uuid);
-        msg.update(&self.log.image_digest.digest);
+        msg.update(instance_cfg.as_bytes());
         msg.update(nonce);
         msg.update(user_data);
         let msg = msg.finalize();
 
-        let nonce = attest_data::Array::<32>(msg.into());
+        let nonce = attest_data::Nonce { 0: msg.into() };
         let attest = self.oxattest_mock.attest(&nonce)?;
 
         let mut data = vec![0u8; OxAttestation::MAX_SIZE];
         let len = hubpack::serialize(&mut data, &attest)
             .map_err(|_| AttestMockError::Serialize)?;
         data.truncate(len);
-        let data = data;
 
-        let mut attestations = Vec::new();
-        let rot = RotType::OxideHardware;
-        attestations.push(Attestation { rot, data });
-
-        Ok(attestations)
+        Ok(Attestation {
+            rot: RotType::OxideHardware,
+            data,
+        })
     }
 
     /// Get all measurement logs from the various RoTs on the platform.
@@ -170,15 +176,21 @@ impl AttestationSigner for AttestMock {
         let rot = RotType::OxideHardware;
         logs.push(MeasurementLog { rot, data });
 
+        logs.push(MeasurementLog {
+            rot: RotType::OxideInstance,
+            data: serde_json::to_string(&self.log)?.as_bytes().to_vec(),
+        });
+
         Ok(logs)
     }
 
-    fn get_cert_chain(&self, rot: RotType) -> Result<PkiPath, Self::Error> {
-        match rot {
-            RotType::OxideHardware => {
-                Ok(self.oxattest_mock.get_certificates()?)
-            }
-        }
+    fn get_cert_chains(&self) -> Result<Vec<CertChain>, Self::Error> {
+        let oxide_platform = CertChain {
+            rot: RotType::OxideHardware,
+            pki_path: self.oxattest_mock.get_certificates()?,
+        };
+
+        Ok(vec![oxide_platform])
     }
 }
 
@@ -224,6 +236,7 @@ mod test {
         for log in logs {
             match log.rot {
                 RotType::OxideHardware => assert!(!log.data.is_empty()),
+                RotType::OxideInstance => assert!(!log.data.is_empty()),
             }
         }
     }
@@ -251,12 +264,12 @@ mod test {
     fn get_cert_chain() {
         let attest = setup();
 
-        let cert_chain = attest
-            .get_cert_chain(RotType::OxideHardware)
-            .expect("get_cert_chain");
-        let leaf_cn = get_cert_cn(&cert_chain[0]);
+        let cert_chains = attest.get_cert_chains().expect("get_cert_chains");
+        assert_eq!(cert_chains.len(), 1);
+        assert!(cert_chains[0].pki_path.len() > 1);
 
         // the leaf cert CN is defined in test-data/config.kdl
+        let leaf_cn = get_cert_cn(&cert_chains[0].pki_path[0]);
         assert_eq!(leaf_cn, Some(Utf8StringRef::new("alias").unwrap()));
     }
 
@@ -279,9 +292,7 @@ mod test {
         use std::fs;
 
         let attest = setup();
-        let cert_chain = attest
-            .get_cert_chain(RotType::OxideHardware)
-            .expect("get cert chain");
+        let cert_chains = attest.get_cert_chains().expect("get cert chain");
 
         let root_cert = fs::read(config::PKI_ROOT).unwrap_or_else(|e| {
             panic!(
@@ -291,38 +302,26 @@ mod test {
         });
         let root_cert = Certificate::load_pem_chain(&root_cert)
             .expect("Parse test root certificate");
-        let verified_root = dice_verifier::verify_cert_chain(
-            &cert_chain,
-            Some(root_cert.as_ref()),
-        )
-        .expect("verify cert chain");
-        assert_eq!(&root_cert[0], verified_root);
+
+        for cert_chain in cert_chains {
+            match cert_chain.rot {
+                RotType::OxideHardware => {
+                    let verified_root = dice_verifier::verify_cert_chain(
+                        &cert_chain.pki_path,
+                        Some(root_cert.as_ref()),
+                    )
+                    .expect("verify cert chain");
+                    assert_eq!(&root_cert[0], verified_root);
+                }
+                // this RoT doesn't have a cert chain
+                RotType::OxideInstance => assert!(false),
+            }
+        }
     }
 
     #[test]
     fn verify_attestation() {
         let attest = setup();
-
-        // Find the log from the OxideHardware RoT.
-        // This log gets special handling since it's included in attestations
-        // from OxideHardware RoT directly.
-        // TODO: Logs provided to VMs will always include one from this RoT.
-        // We may be better off making it easier to find.
-        let logs = attest.get_measurement_logs().expect("get_measurement_logs");
-        let oxlog = logs.iter().find_map(|log| {
-            if log.rot == RotType::OxideHardware {
-                Some(log)
-            } else {
-                None
-            }
-        });
-
-        let (log, _): (Log, _) = if let Some(oxlog) = oxlog {
-            hubpack::deserialize(&oxlog.data)
-                .expect("deserialize hubpacked log")
-        } else {
-            panic!("No measurement log for RotType::OxideHardware");
-        };
 
         // Data passed from VM through API to propolis.
         // propolis, acting as the (sorta) RoT for VM mixes this into the 32
@@ -330,60 +329,37 @@ mod test {
         // We'll need this later (along with the logs) to verify the attestation.
         let nonce = Nonce::from_array(NONCE);
 
-        let cert_chain = attest
-            .get_cert_chain(RotType::OxideHardware)
-            .expect("AttestMock get_cert_chain");
+        let cert_chains =
+            attest.get_cert_chains().expect("AttestMock get_cert_chain");
+        assert_eq!(cert_chains.len(), 1);
         // signer cert is the leaf
-        let signer_pub = &cert_chain[0];
+        let cert = &cert_chains[0].pki_path[0];
 
         let attestation = attest
             .attest(&nonce, &USER_DATA)
             .expect("AttestMock attest");
 
-        // Find the attestation from the OxideHardware RoT.
-        // This gets special handling since we're using it to bind all other
-        // attestations from the platform together
-        // TODO: Attestations provided to VMs will always include one from this
-        // RoT. We may be better off making it easier to find.
-        let attestation = attestation.iter().find_map(|attest| {
-            if attest.rot == RotType::OxideHardware {
-                Some(attest)
-            } else {
-                None
-            }
-        });
-
         let (attestation, _): (OxAttestation, _) =
-            if let Some(attestation) = attestation {
-                hubpack::deserialize(&attestation.data)
-                    .expect("deserialize attestation")
-            } else {
-                panic!("No attestation from RotType::OxideHubris");
-            };
+            hubpack::deserialize(&attestation.data)
+                .expect("deserialize attestation");
+
+        let logs = attest.get_measurement_logs().expect("get_measurement_logs");
 
         // Reconstruct the 32 bytes passed from `AttestMock` down to the
         // RotType::OxideHardware:
         //
-        // We pass `AttestMock` a 32 byte nonce and a &[u8] that we call `data`.
-        // It then combines them as: `sha256(UUID | sha256(rootfs) | nonce | data)`
+        // The challenger passes OxideInstance RoT 32 byte nonce and a &[u8]
+        // that we call `data`. It then combines them as:
+        // `sha256(instance_log | nonce | data)`
         let mut data_digest = Sha256::new();
 
-        // Use the mock instance log as reference integrity measurements for
-        // reconstructing the message signed by the RotType::OxideHardware.
-        //
-        // NOTE: Reference measurements for these things elements of the
-        // attestation aren't something that we can provide in the typical
-        // "signed manifest" sense. References for the following elements of
-        // the attestation will come from:
-        // - uuid: the oxide API call used to start the VM instance
-        // - rootfs: some external authority responsible for producing the VM
-        // image
-        let instance_cfg = fs::read_to_string(config::VM_INSTANCE_CFG)
-            .expect("read ATTEST_INSTANCE_LOG to string");
-        let instance_cfg: VmInstanceConf = serde_json::from_str(&instance_cfg)
-            .expect("parse JSON from mock cfg for instance RoT");
-        data_digest.update(&instance_cfg.uuid);
-        data_digest.update(&instance_cfg.image_digest.digest);
+        // include the log from the OxideInstance RoT in the digest
+        for log in &logs {
+            match log.rot {
+                RotType::OxideInstance => data_digest.update(&log.data),
+                _ => continue,
+            }
+        }
 
         // update digest w/ data provided by the VM
         data_digest.update(&nonce);
@@ -396,8 +372,25 @@ mod test {
             0: data_digest.into(),
         };
 
+        // get the log from the Oxide platform RoT
+        let oxlog = logs.iter().find_map(|log| {
+            if log.rot == RotType::OxideHardware {
+                Some(log)
+            } else {
+                None
+            }
+        });
+
+        // put log in the form expected by the `verify_attestation` function
+        let (log, _): (Log, _) = if let Some(oxlog) = oxlog {
+            hubpack::deserialize(&oxlog.data)
+                .expect("deserialize hubpacked log")
+        } else {
+            panic!("No measurement log for RotType::OxideHardware");
+        };
+
         let result = dice_verifier::verify_attestation(
-            &signer_pub,
+            &cert,
             &attestation,
             &log,
             &data_digest,
@@ -409,6 +402,7 @@ mod test {
     fn appraise_log() {
         use dice_verifier::{MeasurementSet, ReferenceMeasurements};
         use rats_corim::Corim;
+
         let attest = setup();
 
         let corim = Corim::from_file(config::CORIM).expect("Corim from file");
@@ -416,30 +410,63 @@ mod test {
             ReferenceMeasurements::try_from(std::slice::from_ref(&corim))
                 .expect("Reference integrity measurements from file");
 
-        let logs = attest.get_measurement_logs().expect("get_measurement_logs");
-        let oxlog = logs.iter().find_map(|log| {
-            if log.rot == RotType::OxideHardware {
-                Some(log)
+        // get cert chain required to reconstruct the collection of measurements
+        let cert_chains =
+            attest.get_cert_chains().expect("AttestMock get_cert_chain");
+        let cert_chain = cert_chains.iter().find_map(|cert_chain| {
+            if cert_chain.rot == RotType::OxideHardware {
+                Some(cert_chain)
             } else {
                 None
             }
         });
-
-        let (log, _): (Log, _) = if let Some(oxlog) = oxlog {
-            hubpack::deserialize(&oxlog.data)
-                .expect("deserialize hubpacked log")
+        let cert_chain = if let Some(cert_chain) = cert_chain {
+            cert_chain
         } else {
-            panic!("No measurement log for RotType::OxideHardware");
+            panic!("No cert chain for RotType::OxideHardware");
         };
 
-        let cert_chain = attest
-            .get_cert_chain(RotType::OxideHardware)
-            .expect("AttestMock get_cert_chain");
+        // construct a `VmInstanceConf` from test data
+        // this is our reference for appraising the log produced by the
+        // `RotType::OxideInstance`
+        let instance_rim = fs::read_to_string(config::VM_INSTANCE_CFG)
+            .expect("read ATTEST_INSTANCE_LOG to string");
+        let instance_rim: VmInstanceConf = serde_json::from_str(&instance_rim)
+            .expect("parse JSON from rim for instance RoT log");
 
-        let measurements = MeasurementSet::from_artifacts(&cert_chain, &log)
-            .expect("MeasurementSet from PkiPath and Log");
+        let logs = attest.get_measurement_logs().expect("get_measurement_logs");
+        for log in &logs {
+            match log.rot {
+                RotType::OxideHardware => {
+                    // use dice-verifier crate to use the RIMs to appraise the
+                    // log from the OxideHardware RoT
+                    let (log, _): (Log, _) = hubpack::deserialize(&log.data)
+                        .expect("deserialize hubpacked log");
 
-        let result = dice_verifier::verify_measurements(&measurements, &rims);
-        assert!(result.is_ok());
+                    let measurements = MeasurementSet::from_artifacts(
+                        &cert_chain.pki_path,
+                        &log,
+                    )
+                    .expect("MeasurementSet from PkiPath and Log");
+
+                    let result = dice_verifier::verify_measurements(
+                        &measurements,
+                        &rims,
+                    );
+                    assert!(result.is_ok());
+                }
+                RotType::OxideInstance => {
+                    // compare log / config description from the OxideInstance
+                    // RoT to the reference from the config reference
+                    let instance_cfg = std::str::from_utf8(&log.data)
+                        .expect("utf8 from log data");
+                    let instance_cfg: VmInstanceConf =
+                        serde_json::from_str(instance_cfg)
+                            .expect("parse JSON from log data");
+
+                    assert_eq!(instance_rim, instance_cfg);
+                }
+            }
+        }
     }
 }
