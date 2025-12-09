@@ -74,7 +74,7 @@ fn write_path_to_conf(mut file: &File, path: &Path, name: &str) -> Result<()> {
 
     Ok(writeln!(
         file,
-        r##"pub const {}: &str = "{}";"##,
+        "#[allow(dead_code)]\npub const {}: &str =\n    \"{}\";\n",
         name,
         path.display(),
     )?)
