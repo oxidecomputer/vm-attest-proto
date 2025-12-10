@@ -5,11 +5,15 @@ edition = "2024"
 license = "MPL-2.0"
 
 [dependencies]
+anyhow = "1.0.100"
 attest-data.git = "https://github.com/oxidecomputer/dice-util"
+cfg-if = "1.0.4"
+clap = { version = "4.5.53", features = ["derive"] }
 const-oid = { version = "0.9.5", features = ["db"] }
-dice-verifier = { git = "https://github.com/oxidecomputer/dice-util", features = ["mock"] }
+ctrlc = "3.5.1"
+dice-verifier = { git = "https://github.com/oxidecomputer/dice-util", features = ["ipcc", "mock"] }
 ed25519-dalek = { version = "2.1", default-features = false }
-getrandom = "0.3.4"
+getrandom = { version = "0.3.4", features = ["std"] }
 hubpack = "0.1.2"
 rats-corim.git = "https://github.com/oxidecomputer/rats-corim"
 serde = { version = "1.0.228", features = ["derive"] }
