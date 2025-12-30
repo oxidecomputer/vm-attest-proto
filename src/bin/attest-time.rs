@@ -49,9 +49,20 @@ impl fmt::Display for Unit {
     }
 }
 
+#[derive(Clone, Debug, ValueEnum)]
+enum Commands {
+    Attest,
+    GetCertChains,
+    GetMeasurementLogs,
+}
+
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
+    /// Command from the vm_attest_trait::AttestMock to sample.
+    #[clap(value_enum, long, default_value_t = Commands::Attest)]
+    command: Commands,
+
     /// Number of samples to collect. If `None` then collect samples until
     /// canceled.
     #[clap(long)]
@@ -136,9 +147,23 @@ fn main() -> Result<()> {
     while running.load(Ordering::SeqCst) {
         let time = SystemTime::now();
 
-        let _ = attest
-            .attest(&nonce, &user_data)
-            .context("get attestation from Attest impl")?;
+        match args.command {
+            Commands::Attest => {
+                let _ = attest
+                    .attest(&nonce, &user_data)
+                    .context("get attestation from Attest impl")?;
+            }
+            Commands::GetCertChains => {
+                let _ = attest
+                    .get_cert_chains()
+                    .context("get cert chains from Attest impl")?;
+            }
+            Commands::GetMeasurementLogs => {
+                let _ = attest
+                    .get_measurement_logs()
+                    .context("get measurement logs from Attest impl")?;
+            }
+        }
 
         let elapsed = time
             .elapsed()
