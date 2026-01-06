@@ -39,7 +39,7 @@ impl AsRef<[u8]> for Nonce {
 
 #[derive(Debug, PartialEq)]
 pub enum RotType {
-    OxideHardware,
+    OxidePlatform,
     OxideInstance,
 }
 
@@ -57,7 +57,7 @@ pub struct MeasurementLog {
 
 /// A representation of the measurement log produced by the VM instance RoT.
 /// This is the log of measurements that propolis mixes into the data provided
-/// to the attestation produced by the `RotType::OxideHardware`.
+/// to the attestation produced by the `RotType::OxidePlatform`.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct VmInstanceConf {
     pub uuid: Uuid,
@@ -158,7 +158,7 @@ impl AttestationSigner for AttestMock {
         data.truncate(len);
 
         Ok(vec![Attestation {
-            rot: RotType::OxideHardware,
+            rot: RotType::OxidePlatform,
             data,
         }])
     }
@@ -173,7 +173,7 @@ impl AttestationSigner for AttestMock {
         data.truncate(len);
 
         let mut logs = Vec::new();
-        let rot = RotType::OxideHardware;
+        let rot = RotType::OxidePlatform;
         logs.push(MeasurementLog { rot, data });
 
         logs.push(MeasurementLog {
@@ -186,7 +186,7 @@ impl AttestationSigner for AttestMock {
 
     fn get_cert_chains(&self) -> Result<Vec<CertChain>, Self::Error> {
         let oxide_platform = CertChain {
-            rot: RotType::OxideHardware,
+            rot: RotType::OxidePlatform,
             pki_path: self.oxattest_mock.get_certificates()?,
         };
 
@@ -238,7 +238,7 @@ mod test {
         let logs = attest.get_measurement_logs().expect("get_measurement_logs");
         for log in logs {
             match log.rot {
-                RotType::OxideHardware => assert!(!log.data.is_empty()),
+                RotType::OxidePlatform => assert!(!log.data.is_empty()),
                 RotType::OxideInstance => assert!(!log.data.is_empty()),
             }
         }
@@ -308,7 +308,7 @@ mod test {
 
         for cert_chain in cert_chains {
             match cert_chain.rot {
-                RotType::OxideHardware => {
+                RotType::OxidePlatform => {
                     let verified_root = dice_verifier::verify_cert_chain(
                         &cert_chain.pki_path,
                         Some(root_cert.as_ref()),
@@ -345,7 +345,7 @@ mod test {
         assert_eq!(attestations.len(), 1);
         let attestation = &attestations[0];
 
-        assert_eq!(attestation.rot, RotType::OxideHardware);
+        assert_eq!(attestation.rot, RotType::OxidePlatform);
 
         let (attestation, _): (OxAttestation, _) =
             hubpack::deserialize(&attestation.data)
@@ -354,7 +354,7 @@ mod test {
         let logs = attest.get_measurement_logs().expect("get_measurement_logs");
 
         // Reconstruct the 32 bytes passed from `AttestMock` down to the
-        // RotType::OxideHardware:
+        // RotType::OxidePlatform:
         //
         // The challenger passes OxideInstance RoT 32 byte nonce and a &[u8]
         // that we call `data`. It then combines them as:
@@ -382,7 +382,7 @@ mod test {
 
         // get the log from the Oxide platform RoT
         let oxlog = logs.iter().find_map(|log| {
-            if log.rot == RotType::OxideHardware {
+            if log.rot == RotType::OxidePlatform {
                 Some(log)
             } else {
                 None
@@ -394,7 +394,7 @@ mod test {
             hubpack::deserialize(&oxlog.data)
                 .expect("deserialize hubpacked log")
         } else {
-            panic!("No measurement log for RotType::OxideHardware");
+            panic!("No measurement log for RotType::OxidePlatform");
         };
 
         let result = dice_verifier::verify_attestation(
@@ -422,7 +422,7 @@ mod test {
         let cert_chains =
             attest.get_cert_chains().expect("AttestMock get_cert_chain");
         let cert_chain = cert_chains.iter().find_map(|cert_chain| {
-            if cert_chain.rot == RotType::OxideHardware {
+            if cert_chain.rot == RotType::OxidePlatform {
                 Some(cert_chain)
             } else {
                 None
@@ -431,7 +431,7 @@ mod test {
         let cert_chain = if let Some(cert_chain) = cert_chain {
             cert_chain
         } else {
-            panic!("No cert chain for RotType::OxideHardware");
+            panic!("No cert chain for RotType::OxidePlatform");
         };
 
         // construct a `VmInstanceConf` from test data
@@ -445,9 +445,9 @@ mod test {
         let logs = attest.get_measurement_logs().expect("get_measurement_logs");
         for log in &logs {
             match log.rot {
-                RotType::OxideHardware => {
+                RotType::OxidePlatform => {
                     // use dice-verifier crate to use the RIMs to appraise the
-                    // log from the OxideHardware RoT
+                    // log from the OxidePlatform RoT
                     let (log, _): (Log, _) = hubpack::deserialize(&log.data)
                         .expect("deserialize hubpacked log");
 
