@@ -92,7 +92,7 @@ pub trait AttestationSigner {
         &self,
         nonce: &Nonce,
         user_data: &[u8],
-    ) -> Result<Attestation, Self::Error>;
+    ) -> Result<Vec<Attestation>, Self::Error>;
 
     /// Return all relevant measurement logs, in order of concatenation.
     fn get_measurement_logs(&self) -> Result<Vec<MeasurementLog>, Self::Error>;
@@ -140,7 +140,7 @@ impl AttestationSigner for AttestMock {
         &self,
         nonce: &Nonce,
         user_data: &[u8],
-    ) -> Result<Attestation, Self::Error> {
+    ) -> Result<Vec<Attestation>, Self::Error> {
         let instance_cfg = serde_json::to_string(&self.log)?;
 
         let mut msg = Sha256::new();
@@ -157,10 +157,10 @@ impl AttestationSigner for AttestMock {
             .map_err(|_| AttestMockError::Serialize)?;
         data.truncate(len);
 
-        Ok(Attestation {
+        Ok(vec![Attestation {
             rot: RotType::OxideHardware,
             data,
-        })
+        }])
     }
 
     /// Get all measurement logs from the various RoTs on the platform.
@@ -338,9 +338,14 @@ mod test {
         // signer cert is the leaf
         let cert = &cert_chains[0].pki_path[0];
 
-        let attestation = attest
+        let attestations = attest
             .attest(&nonce, &USER_DATA)
             .expect("AttestMock attest");
+
+        assert_eq!(attestations.len(), 1);
+        let attestation = &attestations[0];
+
+        assert_eq!(attestation.rot, RotType::OxideHardware);
 
         let (attestation, _): (OxAttestation, _) =
             hubpack::deserialize(&attestation.data)
