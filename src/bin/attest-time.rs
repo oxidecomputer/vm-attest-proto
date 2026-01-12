@@ -20,7 +20,8 @@ use std::{
     time::SystemTime,
 };
 use vm_attest_trait::{
-    Nonce, VmInstanceAttestMock, VmInstanceAttester, VmInstanceConf,
+    Nonce, VmInstanceAttester,
+    mock::{VmInstanceAttestMock, VmInstanceConf},
 };
 
 mod config {
