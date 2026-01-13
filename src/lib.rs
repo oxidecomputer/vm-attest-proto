@@ -2,8 +2,6 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use x509_cert::PkiPath;
-
 pub mod mock;
 
 /// User chosen value. Probably random data. Must not be reused.
@@ -51,7 +49,7 @@ pub struct MeasurementLog {
 #[allow(dead_code)]
 pub struct CertChain {
     rot: RotType,
-    pki_path: PkiPath,
+    certs: Vec<Vec<u8>>,
 }
 
 /// An interface for obtaining attestations and supporting data from the VM
