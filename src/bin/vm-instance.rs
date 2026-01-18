@@ -6,18 +6,18 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use clap_verbosity::{InfoLevel, Verbosity};
 use dice_verifier::{
-    Attestation as OxAttestation, Corim, Log, MeasurementSet,
+    Attestation as OxAttestation, Corim, Log, MeasurementSet, Nonce,
     ReferenceMeasurements,
 };
 
 use log::{debug, info};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, digest::FixedOutputReset};
 use std::{fs, os::unix::net::UnixStream, path::PathBuf};
 use x509_cert::{Certificate, der::Decode};
 
 use vm_attest_trait::{
-    Nonce, RotType, VmInstanceAttester, mock::VmInstanceConf,
-    socket::VmInstanceAttestSocket,
+    QualifyingData, RotType, VmInstanceRot, mock::VmInstanceConf,
+    socket::VmInstanceRotSocket,
 };
 
 #[derive(Debug, Parser)]
@@ -99,7 +99,7 @@ fn main() -> Result<()> {
 
     let stream = UnixStream::connect(&args.file).context("connec to socket")?;
     debug!("connected to socket");
-    let attest = VmInstanceAttestSocket::new(stream);
+    let attest = VmInstanceRotSocket::new(stream);
 
     let nonce =
         Nonce::from_platform_rng().context("Nonce from paltform RNG")?;
@@ -107,68 +107,41 @@ fn main() -> Result<()> {
     let data = vec![66, 77, 88, 99];
     debug!("user_data: {data:?}");
 
-    let cert_chains = attest.get_cert_chains().context("get cert chains")?;
-    debug!("got cert chains");
+    let mut qualifying_data = Sha256::new();
+    qualifying_data.update(nonce);
+    qualifying_data.update(&data);
+    let qualifying_data = QualifyingData::from(Into::<[u8; 32]>::into(
+        qualifying_data.finalize(),
+    ));
 
-    for cert_chain in &cert_chains {
-        match cert_chain.rot {
-            RotType::OxidePlatform => {
-                // TODO: having access to each cert chain as a Vec<Certificate>
-                // for future use would be nice ... maybe a HashMap keyed on
-                // the RotType.
-                let mut cert_chain_pem = Vec::new();
-                for cert in &cert_chain.certs {
-                    cert_chain_pem.push(
-                        Certificate::from_der(cert)
-                            .context("Certificate from DER")?,
-                    );
-                }
-                let _verified_root = dice_verifier::verify_cert_chain(
-                    &cert_chain_pem,
-                    root_cert.as_deref(),
-                )
-                .context("verify cert chain")?;
-                match root_cert {
-                    Some(_) => {
-                        // TODO: pull subject string from the cert
-                        info!("cert chain verified against provided root");
-                    }
-                    None => info!("cert chain verified to self-signed root"),
-                }
-            }
-            // this RoT doesn't have a cert chain
-            RotType::OxideInstance => {
-                return Err(anyhow!(
-                    "unexpected cert chain from OxideInstance RoT"
-                ));
-            }
+    let attestation = attest
+        .attest(&qualifying_data)
+        .context("get attestations")?;
+    debug!("got attestation");
+
+    // TODO: having access to each cert chain as a Vec<Certificate>
+    // for future use would be nice ... maybe a HashMap keyed on
+    // the RotType.
+    let mut cert_chain_pem = Vec::new();
+    for cert in &attestation.cert_chain {
+        cert_chain_pem
+            .push(Certificate::from_der(cert).context("Certificate from DER")?);
+    }
+    let _verified_root =
+        dice_verifier::verify_cert_chain(&cert_chain_pem, root_cert.as_deref())
+            .context("verify cert chain")?;
+    match root_cert {
+        Some(_) => {
+            // TODO: pull subject string from the cert
+            info!("cert chain verified against provided root");
         }
+        None => info!("cert chain verified to self-signed root"),
     }
 
-    let logs = attest
-        .get_measurement_logs()
-        .context("get measurement logs")?;
-    debug!("got measurement logs");
-
-    let attestations =
-        attest.attest(&nonce, &data).context("get attestations")?;
-    debug!("got attestations");
-
-    if attestations.len() != 1 {
-        return Err(anyhow!("unexpected number of attestations returned"));
-    }
-
-    let attestation = &attestations[0];
-    if attestation.rot != RotType::OxidePlatform {
-        return Err(anyhow!(format!(
-            "unexpected RotType in attestation: {:?}",
-            attestation.rot
-        )));
-    }
-
-    let (attestation, _): (OxAttestation, _) =
-        hubpack::deserialize(&attestation.data)
-            .context("deserialize attestation from Oxide platform RoT")?;
+    let mut qualifying_data = Sha256::new();
+    qualifying_data.update(nonce);
+    qualifying_data.update(&data);
+    let vm_qualifying_data = qualifying_data.finalize_fixed_reset();
 
     // Reconstruct the 32 bytes passed from `VmInstanceAttestMock` down to
     // the RotType::OxidePlatform:
@@ -176,25 +149,21 @@ fn main() -> Result<()> {
     // The challenger passes OxideInstance RoT 32 byte nonce and a &[u8]
     // that we call `data`. It then combines them as:
     // `sha256(instance_log | nonce | data)`
-    let mut data_digest = Sha256::new();
-
+    //
     // include the log from the OxideInstance RoT in the digest
-    for log in &logs {
+    for log in &attestation.measurement_logs {
         match log.rot {
-            RotType::OxideInstance => data_digest.update(&log.data),
+            RotType::OxideInstance => qualifying_data.update(&log.data),
             _ => continue,
         }
     }
-
-    // update digest w/ data provided by the VM
-    data_digest.update(&nonce);
-    data_digest.update(&data);
+    qualifying_data.update(vm_qualifying_data);
 
     // smuggle this data into the `verify_attestation` function in the
     // `attest_data::Nonce` type
-    let data_digest = data_digest.finalize();
-    let data_digest = attest_data::Nonce {
-        0: data_digest.into(),
+    let qualifying_data = qualifying_data.finalize();
+    let qualifying_data = Nonce {
+        0: qualifying_data.into(),
     };
 
     // get the log from the Oxide platform RoT
@@ -203,7 +172,10 @@ fn main() -> Result<()> {
     // As there is no transformation of the argument this could be written as:
     // let _ = (0..3).find(|&x| x > 2);
 
-    let oxlog = logs.iter().find(|&log| log.rot == RotType::OxidePlatform);
+    let oxlog = attestation
+        .measurement_logs
+        .iter()
+        .find(|&log| log.rot == RotType::OxidePlatform);
 
     // put log in the form expected by the `verify_attestation` function
     let (log, _): (Log, _) = if let Some(oxlog) = oxlog {
@@ -213,14 +185,18 @@ fn main() -> Result<()> {
     };
 
     // signer cert is the leaf
-    let cert = Certificate::from_der(&cert_chains[0].certs[0])
+    let cert = Certificate::from_der(&attestation.cert_chain[0])
         .expect("Certificate from DER");
+
+    let (ox_attest, _): (OxAttestation, _) =
+        hubpack::deserialize(&attestation.attestation)
+            .context("deserialize attestation from Oxide platform RoT")?;
 
     let result = dice_verifier::verify_attestation(
         &cert,
-        &attestation,
+        &ox_attest,
         &log,
-        &data_digest,
+        &qualifying_data,
     );
 
     if result.is_err() {
@@ -229,19 +205,7 @@ fn main() -> Result<()> {
         info!("attestation verified");
     }
 
-    // get cert chain required to reconstruct the collection of measurements
-    // from the Oxide Platform RoT
-    let oxplatform_rot_cert_chain = cert_chains
-        .iter()
-        .find(|&cert_chain| cert_chain.rot == RotType::OxidePlatform);
-    let oxplatform_rot_cert_chain =
-        if let Some(cert_chain) = oxplatform_rot_cert_chain {
-            cert_chain
-        } else {
-            return Err(anyhow!("No cert chain for RotType::OxidePlatform"));
-        };
-
-    for log in &logs {
+    for log in &attestation.measurement_logs {
         match log.rot {
             RotType::OxidePlatform => {
                 // use dice-verifier crate to use the RIMs to appraise the
@@ -251,7 +215,7 @@ fn main() -> Result<()> {
                         "deserialize hubpacked log from Oxide Platform RoT",
                     )?;
                 let mut cert_chain_pem = Vec::new();
-                for cert in &oxplatform_rot_cert_chain.certs {
+                for cert in &attestation.cert_chain {
                     cert_chain_pem.push(
                         Certificate::from_der(cert)
                             .context("Certificate from DER")?,
