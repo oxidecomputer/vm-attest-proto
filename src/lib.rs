@@ -9,13 +9,9 @@ pub mod socket;
 
 /// User chosen value. Probably random data. Must not be reused.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Nonce([u8; 32]);
+pub struct QualifyingData([u8; 32]);
 
-impl Nonce {
-    pub fn from_array(nonce: [u8; 32]) -> Self {
-        Self(nonce)
-    }
-
+impl QualifyingData {
     pub fn from_platform_rng() -> Result<Self, getrandom::Error> {
         let mut nonce = [0u8; 32];
         getrandom::fill(&mut nonce[..])?;
@@ -23,11 +19,21 @@ impl Nonce {
 
         Ok(Self(nonce))
     }
+
+    pub fn into_inner(self) -> [u8; 32] {
+        self.0
+    }
 }
 
-impl AsRef<[u8]> for Nonce {
+impl AsRef<[u8]> for QualifyingData {
     fn as_ref(&self) -> &[u8] {
         &self.0
+    }
+}
+
+impl From<[u8; 32]> for QualifyingData {
+    fn from(nonce: [u8; 32]) -> Self {
+        Self(nonce)
     }
 }
 
@@ -39,83 +45,46 @@ pub enum RotType {
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Attestation {
-    pub rot: RotType,
-    pub data: Vec<u8>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize, Serialize)]
 pub struct MeasurementLog {
     pub rot: RotType,
     pub data: Vec<u8>,
 }
 
-#[allow(dead_code)]
+// TODO: bundle all required data in a single response
 #[derive(Debug, Deserialize, Serialize)]
-pub struct CertChain {
-    pub rot: RotType,
-    pub certs: Vec<Vec<u8>>,
+pub struct PlatformAttestation {
+    // the attestation from the Oxide Platform RoT
+    // the message signed by RoT is:
+    //   attestation = sign(hubpack(log) | qualifying_data)
+    // where:
+    //   `vm_data` is the 32 bytres passed from the VM down to the VmInstanceRot
+    //   `qualifying_data` = sha(vm_cfg | vm_data)
+    // this is a hubpack serialization of the `attest_data::Attestation`
+    // structure
+    // NOTE: JSON would be better
+    pub attestation: Vec<u8>,
+
+    // the platform RoT cert chain
+    // these are DER encoded, ordered from leaf to first intermediate
+    // TODO: encoding these as PEM strings may be preferable, the JSON encoded
+    // `Vec<u8>` may end up being less efficient
+    pub cert_chain: Vec<Vec<u8>>,
+
+    // measurement logs from the:
+    // - Oxide Platform RoT: a hubpack serialized attest_data::Log
+    // - VM Instance RoT: a JSON serialized mock::Measurement structure
+    pub measurement_logs: Vec<MeasurementLog>,
 }
 
 /// An interface for obtaining attestations and supporting data from the VM
 /// Instance RoT
-pub trait VmInstanceAttester {
+pub trait VmInstanceRot {
     type Error;
 
-    /// Get an attestation from each of the RoTs resident on the host platform.
+    /// Get an attestation from each of the RoTs resident on the host platform
+    /// qualified by the provided `QualifyingData`.
     fn attest(
         &self,
-        nonce: &Nonce,
-        user_data: &[u8],
-    ) -> Result<Vec<Attestation>, Self::Error>;
-
-    /// Return all relevant measurement logs, in order of concatenation.
-    fn get_measurement_logs(&self) -> Result<Vec<MeasurementLog>, Self::Error>;
-
-    /// Return the cert chain for the given RotType.
-    fn get_cert_chains(&self) -> Result<Vec<CertChain>, Self::Error>;
-}
-
-#[cfg(test)]
-mod test {
-    use crate::*;
-
-    const NONCE: [u8; 32] = [
-        129, 37, 8, 100, 45, 226, 22, 204, 43, 211, 159, 134, 112, 205, 125,
-        172, 227, 69, 213, 38, 85, 213, 255, 132, 157, 226, 213, 93, 204, 133,
-        188, 63,
-    ];
-
-    #[test]
-    fn nonce_to_json() {
-        let nonce = Nonce::from_array(NONCE);
-        let json = serde_json::to_string(&nonce).expect("Nonce to JSON");
-        assert_eq!(
-            json,
-            "[129,37,8,100,45,226,22,204,43,211,159,134,112,205,125,172,227,69,213,38,85,213,255,132,157,226,213,93,204,133,188,63]"
-        );
-    }
-
-    #[test]
-    fn rottype_to_json() {
-        let json = serde_json::to_string(&RotType::OxidePlatform)
-            .expect("RotType to JSON");
-        assert_eq!(json, "\"OxidePlatform\"");
-    }
-
-    #[test]
-    fn attestation_to_json() {
-        let data = vec![0xde, 0xad, 0xbe, 0xef];
-        let attestation = Attestation {
-            rot: RotType::OxidePlatform,
-            data,
-        };
-        let json =
-            serde_json::to_string(&attestation).expect("RotType to JSON");
-        assert_eq!(
-            json,
-            "{\"rot\":\"OxidePlatform\",\"data\":[222,173,190,239]}"
-        );
-    }
+        qualifying_data: &QualifyingData,
+    ) -> Result<PlatformAttestation, Self::Error>;
 }
