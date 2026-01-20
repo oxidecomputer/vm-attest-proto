@@ -2,16 +2,24 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use dice_verifier::{
+    MeasurementSetError, Nonce, PkiPathSignatureVerifierError,
+    VerifyAttestationError, VerifyMeasurementsError,
+};
 use log::debug;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
     io::{BufRead, BufReader, Write},
+    net::{TcpListener, TcpStream},
     ops::DerefMut,
     os::unix::net::{UnixListener, UnixStream},
+    str::Utf8Error,
 };
 
 use crate::{
-    PlatformAttestation, QualifyingData, VmInstanceRot,
+    PlatformAttestation, QualifyingData, RotType, VmInstanceRot,
     mock::{VmInstanceRotMock, VmInstanceRotMockError},
 };
 
@@ -134,5 +142,170 @@ impl VmInstanceRotSocketServer {
         }
 
         Ok(())
+    }
+}
+
+/// Possible errors from `VmInstanceAttestSocketServer::run`
+#[derive(Debug, thiserror::Error)]
+pub enum VmInstanceTcpServerError {
+    #[error("error converting type with serde")]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("error from the underlying socket")]
+    Socket(#[from] std::io::Error),
+
+    #[error("error from the underlying VmInstanceRot")]
+    VmInstanceRotError(#[from] VmInstanceAttestSocketError),
+}
+
+/// This type acts as a socket server accepting encoded messages that
+/// correspond to functions from the VmInstanceAttester.
+pub struct VmInstanceTcpServer {
+    challenge_listener: TcpListener,
+    vm_instance_rot: VmInstanceRotSocket,
+}
+
+impl VmInstanceTcpServer {
+    pub fn new(
+        challenge_listener: TcpListener,
+        vm_instance_rot: VmInstanceRotSocket,
+    ) -> Self {
+        Self {
+            challenge_listener,
+            vm_instance_rot,
+        }
+    }
+
+    pub fn run(&self) -> Result<(), VmInstanceTcpServerError> {
+        let mut msg = String::new();
+        for client in self.challenge_listener.incoming() {
+            debug!("new client");
+
+            let mut client = client?;
+            loop {
+                let mut reader = BufReader::new(&mut client);
+
+                //   - read nonce from stream (JSON)
+                let count = reader.read_line(&mut msg)?;
+                if count == 0 {
+                    debug!("read 0 bytes: EOF");
+                    break;
+                }
+
+                debug!("nonce received: {msg}");
+                let nonce: Nonce = serde_json::from_str(&msg)?;
+                debug!("nonce decoded: {nonce:?}");
+
+                //   - generate `public_key`
+                let user_data = vec![1, 2, 3, 4];
+
+                //   - generate `qualifying_data`
+                let mut qualifying_data = Sha256::new();
+                qualifying_data.update(nonce);
+                qualifying_data.update(&user_data);
+                let qualifying_data = QualifyingData::from(
+                    Into::<[u8; 32]>::into(qualifying_data.finalize()),
+                );
+
+                //   - get `attestation` from `VmInstanceRot` by passing
+                //     `qualifying_data` to VmInstanceRot through
+                //     `VmInstanceRotSocket::attest`
+                let platform_attestation =
+                    self.vm_instance_rot.attest(&qualifying_data)?;
+
+                let attested_key = AttestedKey {
+                    attestation: platform_attestation,
+                    public_key: user_data,
+                };
+
+                //   - return `attestation` + `public_key`
+                let mut response = serde_json::to_string(&attested_key)?;
+                response.push('\n');
+
+                debug!("sending response: {response}");
+                client.write_all(response.as_bytes())?;
+                msg.clear();
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AttestedKey {
+    pub attestation: PlatformAttestation,
+    pub public_key: Vec<u8>,
+}
+
+/// Possible errors from `VmInstanceAttestSocketServer::run`
+#[derive(Debug, thiserror::Error)]
+pub enum VmInstanceTcpError {
+    #[error("attestation verification failed")]
+    AttestationVerification(#[from] VerifyAttestationError),
+
+    #[error("attestation verification failed")]
+    CertChainVerification(#[from] PkiPathSignatureVerifierError),
+
+    #[error("failed to parse Cert from DER")]
+    CertFromDer(#[from] x509_cert::der::Error),
+
+    #[error("failed to deserialize hubpacked message")]
+    Hubpack(#[from] hubpack::Error),
+
+    #[error("failed to generate Nonce")]
+    Nonce(#[from] attest_data::AttestDataError),
+
+    #[error("error converting type with serde")]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("error from the underlying socket")]
+    Socket(#[from] std::io::Error),
+
+    #[error("error verifying VmInstance measurements")]
+    VmInstanceVerification,
+
+    #[error("failed to verify measurements from Oxide Platform RoT")]
+    PlatformLogAppraisal(#[from] VerifyMeasurementsError),
+
+    #[error("failed to create MeasurementSet from artifacts")]
+    MeasurementSet(#[from] MeasurementSetError),
+
+    #[error("attestation from server is missing a required measurement log")]
+    MissingMeasurementLog(RotType),
+
+    #[error("verified root has a malformed CN")]
+    InvalidCn(#[from] Utf8Error),
+
+    #[error("no CN found in verified root cert")]
+    NoCn,
+}
+
+pub struct VmInstanceTcp {
+    stream: TcpStream,
+}
+
+impl VmInstanceTcp {
+    pub fn new(stream: TcpStream) -> Self {
+        Self { stream }
+    }
+
+    pub fn attest_key(
+        &mut self,
+        nonce: &Nonce,
+    ) -> Result<AttestedKey, VmInstanceTcpError> {
+        debug!("generated nonce: {nonce:?}");
+        let mut nonce = serde_json::to_string(&nonce)?;
+        nonce.push('\n');
+        self.stream.write_all(nonce.as_bytes())?;
+        debug!("nonce sent to vm instance");
+
+        // get back struct w/ attestation + public key
+        let mut reader = BufReader::new(&self.stream);
+        let mut response = String::new();
+        reader.read_line(&mut response)?;
+        debug!("got attesetd key: {response}");
+
+        Ok(serde_json::from_str(&response)?)
     }
 }

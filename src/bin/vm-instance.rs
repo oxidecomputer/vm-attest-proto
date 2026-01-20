@@ -5,42 +5,26 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use clap_verbosity::{InfoLevel, Verbosity};
-use dice_verifier::{
-    Attestation as OxAttestation, Corim, Log, MeasurementSet, Nonce,
-    ReferenceMeasurements,
-};
 
-use log::{debug, info};
-use sha2::{Digest, Sha256, digest::FixedOutputReset};
-use std::{fs, os::unix::net::UnixStream, path::PathBuf};
-use x509_cert::{Certificate, der::Decode};
+use log::debug;
+use std::{net::TcpListener, os::unix::net::UnixStream, path::PathBuf};
 
 use vm_attest_trait::{
-    QualifyingData, RotType, VmInstanceRot, mock::VmInstanceConf,
-    socket::VmInstanceRotSocket,
+    socket::VmInstanceRotSocket, socket::VmInstanceTcpServer,
 };
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-    /// Dump debug output
+    // Dump debug output
     #[command(flatten)]
     verbose: Verbosity<InfoLevel>,
 
-    #[clap(long)]
-    root_cert: Option<PathBuf>,
-
-    #[clap(long, default_value_t = false)]
-    self_signed: bool,
-
-    #[clap(long)]
-    reference_measurements: Vec<PathBuf>,
-
-    #[clap(long)]
-    vm_instance_cfg: PathBuf,
-
     // Path to socket file. If file already exists an error is returned
-    file: PathBuf,
+    socket: PathBuf,
+
+    // Address used for server that listens for challenges
+    address: String,
 }
 
 fn main() -> Result<()> {
@@ -51,203 +35,20 @@ fn main() -> Result<()> {
         .init();
 
     // fail early if the socket file doesn't exist
-    if !args.file.exists() {
+    if !args.socket.exists() {
         return Err(anyhow!("socket file missing"));
     }
 
-    // load reference integrity measurements from CORIMs
-    let mut corims = Vec::new();
-    for corim in &args.reference_measurements {
-        let corim = Corim::from_file(corim).with_context(|| {
-            format!("loading CORIM from: {}", corim.display())
-        })?;
-        corims.push(corim);
-    }
-    let rims = ReferenceMeasurements::try_from(corims.as_slice())
-        .context("Reference measurements from CORIMs")?;
-    debug!("loaded reference integrity measurements");
+    let stream = UnixStream::connect(&args.socket)
+        .context("connect to domain socket")?;
+    debug!("connected to VmInstanceRotServer socket");
+    let vm_instance_rot = VmInstanceRotSocket::new(stream);
 
-    // load the provided root certs
-    let root_cert = match args.root_cert {
-        Some(path) => {
-            let root_cert = fs::read(&path)
-                .with_context(|| format!("read file: {}", path.display()))?;
-            Some(
-                Certificate::load_pem_chain(&root_cert)
-                    .context("failed to load certs from the provided file")?,
-            )
-        }
-        None => {
-            if !args.self_signed {
-                return Err(anyhow!(
-                    "No root cert, `--self-signed` must be explicit"
-                ));
-            } else {
-                None
-            }
-        }
-    };
-    debug!("loaded root certs: {:?}", root_cert);
+    // creat TCP listener
+    let challenge_listener =
+        TcpListener::bind(&args.address).context("bind to TCP socket")?;
+    debug!("Listening on TCP address{:?}", &args.address);
 
-    // construct a `VmInstanceConf` from test data
-    // this is our reference for appraising the log produced by the
-    // `RotType::OxideInstance`
-    let instance_rim = fs::read_to_string(&args.vm_instance_cfg)
-        .context("read ATTEST_INSTANCE_LOG to string")?;
-    let instance_rim: VmInstanceConf = serde_json::from_str(&instance_rim)
-        .context("parse JSON from rim for instance RoT log")?;
-
-    let stream = UnixStream::connect(&args.file).context("connec to socket")?;
-    debug!("connected to socket");
-    let attest = VmInstanceRotSocket::new(stream);
-
-    let nonce =
-        Nonce::from_platform_rng().context("Nonce from paltform RNG")?;
-    debug!("generating nonce: {nonce:?}");
-    let data = vec![66, 77, 88, 99];
-    debug!("user_data: {data:?}");
-
-    let mut qualifying_data = Sha256::new();
-    qualifying_data.update(nonce);
-    qualifying_data.update(&data);
-    let qualifying_data = QualifyingData::from(Into::<[u8; 32]>::into(
-        qualifying_data.finalize(),
-    ));
-
-    let attestation = attest
-        .attest(&qualifying_data)
-        .context("get attestations")?;
-    debug!("got attestation");
-
-    // TODO: having access to each cert chain as a Vec<Certificate>
-    // for future use would be nice ... maybe a HashMap keyed on
-    // the RotType.
-    let mut cert_chain_pem = Vec::new();
-    for cert in &attestation.cert_chain {
-        cert_chain_pem
-            .push(Certificate::from_der(cert).context("Certificate from DER")?);
-    }
-    let _verified_root =
-        dice_verifier::verify_cert_chain(&cert_chain_pem, root_cert.as_deref())
-            .context("verify cert chain")?;
-    match root_cert {
-        Some(_) => {
-            // TODO: pull subject string from the cert
-            info!("cert chain verified against provided root");
-        }
-        None => info!("cert chain verified to self-signed root"),
-    }
-
-    let mut qualifying_data = Sha256::new();
-    qualifying_data.update(nonce);
-    qualifying_data.update(&data);
-    let vm_qualifying_data = qualifying_data.finalize_fixed_reset();
-
-    // Reconstruct the 32 bytes passed from `VmInstanceAttestMock` down to
-    // the RotType::OxidePlatform:
-    //
-    // The challenger passes OxideInstance RoT 32 byte nonce and a &[u8]
-    // that we call `data`. It then combines them as:
-    // `sha256(instance_log | nonce | data)`
-    //
-    // include the log from the OxideInstance RoT in the digest
-    for log in &attestation.measurement_logs {
-        match log.rot {
-            RotType::OxideInstance => qualifying_data.update(&log.data),
-            _ => continue,
-        }
-    }
-    qualifying_data.update(vm_qualifying_data);
-
-    // smuggle this data into the `verify_attestation` function in the
-    // `attest_data::Nonce` type
-    let qualifying_data = qualifying_data.finalize();
-    let qualifying_data = Nonce {
-        0: qualifying_data.into(),
-    };
-
-    // get the log from the Oxide platform RoT
-
-    // let _ = (0..3).find_map(|x| if x > 2 { Some(x) } else { None });
-    // As there is no transformation of the argument this could be written as:
-    // let _ = (0..3).find(|&x| x > 2);
-
-    let oxlog = attestation
-        .measurement_logs
-        .iter()
-        .find(|&log| log.rot == RotType::OxidePlatform);
-
-    // put log in the form expected by the `verify_attestation` function
-    let (log, _): (Log, _) = if let Some(oxlog) = oxlog {
-        hubpack::deserialize(&oxlog.data).expect("deserialize hubpacked log")
-    } else {
-        return Err(anyhow!("No measurement log for RotType::OxidePlatform"));
-    };
-
-    // signer cert is the leaf
-    let cert = Certificate::from_der(&attestation.cert_chain[0])
-        .expect("Certificate from DER");
-
-    let (ox_attest, _): (OxAttestation, _) =
-        hubpack::deserialize(&attestation.attestation)
-            .context("deserialize attestation from Oxide platform RoT")?;
-
-    let result = dice_verifier::verify_attestation(
-        &cert,
-        &ox_attest,
-        &log,
-        &qualifying_data,
-    );
-
-    if result.is_err() {
-        return Err(anyhow!("attestation verification failed"));
-    } else {
-        info!("attestation verified");
-    }
-
-    for log in &attestation.measurement_logs {
-        match log.rot {
-            RotType::OxidePlatform => {
-                // use dice-verifier crate to use the RIMs to appraise the
-                // log from the OxidePlatform RoT
-                let (log, _): (Log, _) = hubpack::deserialize(&log.data)
-                    .context(
-                        "deserialize hubpacked log from Oxide Platform RoT",
-                    )?;
-                let mut cert_chain_pem = Vec::new();
-                for cert in &attestation.cert_chain {
-                    cert_chain_pem.push(
-                        Certificate::from_der(cert)
-                            .context("Certificate from DER")?,
-                    );
-                }
-
-                let measurements =
-                    MeasurementSet::from_artifacts(&cert_chain_pem, &log)
-                        .expect("MeasurementSet from PkiPath and Log");
-
-                dice_verifier::verify_measurements(&measurements, &rims)
-                    .context("appraising measurements")?;
-                info!("measurement log from Oxide Platform RoT appraised");
-            }
-            RotType::OxideInstance => {
-                // compare log / config description from the OxideInstance
-                // RoT to the reference from the config reference
-                let instance_cfg =
-                    std::str::from_utf8(&log.data).expect("utf8 from log data");
-                let instance_cfg: VmInstanceConf =
-                    serde_json::from_str(instance_cfg)
-                        .expect("parse JSON from log data");
-
-                if instance_rim != instance_cfg {
-                    return Err(anyhow!(
-                        "appraisal of measurements from VmInstanceRot failed"
-                    ));
-                }
-                info!("metadata from Oxide VM Instance RoT appraised");
-            }
-        }
-    }
-
-    Ok(())
+    let server = VmInstanceTcpServer::new(challenge_listener, vm_instance_rot);
+    Ok(server.run()?)
 }

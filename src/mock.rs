@@ -189,26 +189,6 @@ mod test {
         QualifyingData::from(Into::<[u8; 32]>::into(digest.finalize()))
     }
 
-    // utility function to get common name from cert subject
-    #[allow(dead_code)]
-    fn get_cert_cn(cert: &Certificate) -> Option<Utf8StringRef<'_>> {
-        use const_oid::db::rfc4519::COMMON_NAME;
-
-        for elm in cert.tbs_certificate.subject.0.iter() {
-            for atav in elm.0.iter() {
-                if atav.oid == COMMON_NAME {
-                    return Some(
-                        Utf8StringRef::try_from(&atav.value).expect(
-                            "Decode name attribute value to UTF8 string",
-                        ),
-                    );
-                }
-            }
-        }
-
-        None
-    }
-
     #[test]
     fn attest() {
         let attest = setup();
