@@ -25,6 +25,7 @@ use crate::{
 
 // This type is used by software within the VM instance to send commands and
 // get responses from an implementation of the VmInstanceRot over a socket
+#[derive(Debug)]
 pub struct VmInstanceRotSocket {
     socket: RefCell<UnixStream>,
 }
@@ -147,7 +148,7 @@ impl VmInstanceRotSocketServer {
 
 /// Possible errors from `VmInstanceAttestSocketServer::run`
 #[derive(Debug, thiserror::Error)]
-pub enum VmInstanceTcpServerError {
+pub enum VmInstanceTcpServerError<T: VmInstanceRot> {
     #[error("error converting type with serde")]
     Serialization(#[from] serde_json::Error),
 
@@ -155,28 +156,25 @@ pub enum VmInstanceTcpServerError {
     Socket(#[from] std::io::Error),
 
     #[error("error from the underlying VmInstanceRot")]
-    VmInstanceRotError(#[from] VmInstanceAttestSocketError),
+    VmInstanceRotError(<T as VmInstanceRot>::Error),
 }
 
 /// This type acts as a socket server accepting encoded messages that
 /// correspond to functions from the VmInstanceAttester.
-pub struct VmInstanceTcpServer {
+pub struct VmInstanceTcpServer<T: VmInstanceRot> {
     challenge_listener: TcpListener,
-    vm_instance_rot: VmInstanceRotSocket,
+    vm_instance_rot: T,
 }
 
-impl VmInstanceTcpServer {
-    pub fn new(
-        challenge_listener: TcpListener,
-        vm_instance_rot: VmInstanceRotSocket,
-    ) -> Self {
+impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
+    pub fn new(challenge_listener: TcpListener, vm_instance_rot: T) -> Self {
         Self {
             challenge_listener,
             vm_instance_rot,
         }
     }
 
-    pub fn run(&self) -> Result<(), VmInstanceTcpServerError> {
+    pub fn run(&self) -> Result<(), VmInstanceTcpServerError<T>> {
         let mut msg = String::new();
         for client in self.challenge_listener.incoming() {
             debug!("new client");
@@ -211,7 +209,9 @@ impl VmInstanceTcpServer {
                 //     `qualifying_data` to VmInstanceRot through
                 //     `VmInstanceRotSocket::attest`
                 let platform_attestation =
-                    self.vm_instance_rot.attest(&qualifying_data)?;
+                    self.vm_instance_rot.attest(&qualifying_data).map_err(
+                        VmInstanceTcpServerError::<T>::VmInstanceRotError,
+                    )?;
 
                 let attested_key = AttestedKey {
                     attestation: platform_attestation,
@@ -231,7 +231,6 @@ impl VmInstanceTcpServer {
         Ok(())
     }
 }
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AttestedKey {
     pub attestation: PlatformAttestation,
