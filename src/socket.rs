@@ -21,14 +21,11 @@ use std::{
 use crate::{
     PlatformAttestation, QualifyingData, RotType, VmInstanceRot,
     mock::{VmInstanceRotMock, VmInstanceRotMockError},
-    vsock::{
-        VmInstanceRotVsockClient, VmInstanceRotVsockClientError,
-        VmInstanceRotVsockError,
-    },
 };
 
 // This type is used by software within the VM instance to send commands and
 // get responses from an implementation of the VmInstanceRot over a socket
+#[derive(Debug)]
 pub struct VmInstanceRotSocket {
     socket: RefCell<UnixStream>,
 }
@@ -151,7 +148,7 @@ impl VmInstanceRotSocketServer {
 
 /// Possible errors from `VmInstanceAttestSocketServer::run`
 #[derive(Debug, thiserror::Error)]
-pub enum VmInstanceTcpServerError {
+pub enum VmInstanceTcpServerError<T: VmInstanceRot> {
     #[error("error converting type with serde")]
     Serialization(#[from] serde_json::Error),
 
@@ -159,28 +156,25 @@ pub enum VmInstanceTcpServerError {
     Socket(#[from] std::io::Error),
 
     #[error("error from the underlying VmInstanceRot")]
-    VmInstanceRotError(#[from] VmInstanceAttestSocketError),
+    VmInstanceRotError(<T as VmInstanceRot>::Error),
 }
 
 /// This type acts as a socket server accepting encoded messages that
 /// correspond to functions from the VmInstanceAttester.
-pub struct VmInstanceTcpServer {
+pub struct VmInstanceTcpServer<T: VmInstanceRot> {
     challenge_listener: TcpListener,
-    vm_instance_rot: VmInstanceRotSocket,
+    vm_instance_rot: T,
 }
 
-impl VmInstanceTcpServer {
-    pub fn new(
-        challenge_listener: TcpListener,
-        vm_instance_rot: VmInstanceRotSocket,
-    ) -> Self {
+impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
+    pub fn new(challenge_listener: TcpListener, vm_instance_rot: T) -> Self {
         Self {
             challenge_listener,
             vm_instance_rot,
         }
     }
 
-    pub fn run(&self) -> Result<(), VmInstanceTcpServerError> {
+    pub fn run(&self) -> Result<(), VmInstanceTcpServerError<T>> {
         let mut msg = String::new();
         for client in self.challenge_listener.incoming() {
             debug!("new client");
@@ -215,7 +209,9 @@ impl VmInstanceTcpServer {
                 //     `qualifying_data` to VmInstanceRot through
                 //     `VmInstanceRotSocket::attest`
                 let platform_attestation =
-                    self.vm_instance_rot.attest(&qualifying_data)?;
+                    self.vm_instance_rot.attest(&qualifying_data).map_err(
+                        VmInstanceTcpServerError::<T>::VmInstanceRotError,
+                    )?;
 
                 let attested_key = AttestedKey {
                     attestation: platform_attestation,
@@ -235,97 +231,6 @@ impl VmInstanceTcpServer {
         Ok(())
     }
 }
-
-/// Possible errors from `VmInstanceAttestSocketServer::run`
-#[derive(Debug, thiserror::Error)]
-pub enum VmInstanceTcpVsockServerError {
-    #[error("error converting type with serde")]
-    Serialization(#[from] serde_json::Error),
-
-    #[error("error from the underlying socket")]
-    Socket(#[from] std::io::Error),
-
-    #[error("error from the underlying VmInstanceRot")]
-    VmInstanceRotError(#[from] VmInstanceRotVsockError),
-
-    #[error("error from the unerlying VmInstanceRot")]
-    VmInstanceRotVsockClient(#[from] VmInstanceRotVsockClientError),
-}
-
-// TODO: this should be combined w/ the previous one when I figure out how to
-// box dyn whatever
-pub struct VmInstanceTcpVsockServer {
-    challenge_listener: TcpListener,
-    vm_instance_rot: VmInstanceRotVsockClient,
-}
-
-impl VmInstanceTcpVsockServer {
-    pub fn new(
-        challenge_listener: TcpListener,
-        vm_instance_rot: VmInstanceRotVsockClient,
-    ) -> Self {
-        Self {
-            challenge_listener,
-            vm_instance_rot,
-        }
-    }
-
-    pub fn run(&self) -> Result<(), VmInstanceTcpVsockServerError> {
-        let mut msg = String::new();
-        for client in self.challenge_listener.incoming() {
-            debug!("new client");
-
-            let mut client = client?;
-            loop {
-                let mut reader = BufReader::new(&mut client);
-
-                //   - read nonce from stream (JSON)
-                let count = reader.read_line(&mut msg)?;
-                if count == 0 {
-                    debug!("read 0 bytes: EOF");
-                    break;
-                }
-
-                debug!("nonce received: {msg}");
-                let nonce: Nonce = serde_json::from_str(&msg)?;
-                debug!("nonce decoded: {nonce:?}");
-
-                //   - generate `public_key`
-                let user_data = vec![1, 2, 3, 4];
-
-                //   - generate `qualifying_data`
-                let mut qualifying_data = Sha256::new();
-                qualifying_data.update(nonce);
-                qualifying_data.update(&user_data);
-                let qualifying_data = QualifyingData::from(
-                    Into::<[u8; 32]>::into(qualifying_data.finalize()),
-                );
-
-                //   - get `attestation` from `VmInstanceRot` by passing
-                //     `qualifying_data` to VmInstanceRot through
-                //     `VmInstanceRotSocket::attest`
-                let platform_attestation =
-                    self.vm_instance_rot.attest(&qualifying_data)?;
-
-                let attested_key = AttestedKey {
-                    attestation: platform_attestation,
-                    public_key: user_data,
-                };
-
-                //   - return `attestation` + `public_key`
-                let mut response = serde_json::to_string(&attested_key)?;
-                response.push('\n');
-
-                debug!("sending response: {response}");
-                client.write_all(response.as_bytes())?;
-                msg.clear();
-            }
-        }
-
-        Ok(())
-    }
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AttestedKey {
     pub attestation: PlatformAttestation,

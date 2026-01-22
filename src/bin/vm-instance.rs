@@ -11,9 +11,7 @@ use std::{net::TcpListener, os::unix::net::UnixStream, path::PathBuf};
 use vsock::{VMADDR_CID_HOST, VsockAddr, VsockStream};
 
 use vm_attest_trait::{
-    socket::{
-        VmInstanceRotSocket, VmInstanceTcpServer, VmInstanceTcpVsockServer,
-    },
+    socket::{VmInstanceRotSocket, VmInstanceTcpServer},
     vsock::VmInstanceRotVsockClient,
 };
 
@@ -64,7 +62,6 @@ fn main() -> Result<()> {
             debug!("connected to VmInstanceRotServer socket");
             let vm_instance_rot = VmInstanceRotSocket::new(stream);
 
-            // TODO: this should be common code
             let challenge_listener = TcpListener::bind(&args.address)
                 .context("bind to TCP socket")?;
             debug!("Listening on TCP address{:?}", &args.address);
@@ -82,16 +79,13 @@ fn main() -> Result<()> {
             debug!("creating VmInstanceRotVsockClient from VsockStream");
             let vm_instance_rot = VmInstanceRotVsockClient::new(stream);
 
-            // TODO: this should be common code
             debug!("binding to address: {}", &args.address);
             let challenge_listener = TcpListener::bind(&args.address)
                 .context("bind to TCP socket")?;
             debug!("Listening on TCP address{:?}", &args.address);
 
-            let server = VmInstanceTcpVsockServer::new(
-                challenge_listener,
-                vm_instance_rot,
-            );
+            let server =
+                VmInstanceTcpServer::new(challenge_listener, vm_instance_rot);
             Ok(server.run()?)
         }
     }

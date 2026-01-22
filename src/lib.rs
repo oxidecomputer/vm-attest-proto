@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use serde::{Deserialize, Serialize};
+use std::{error, fmt};
 
 pub mod mock;
 pub mod socket;
@@ -80,7 +81,7 @@ pub struct PlatformAttestation {
 /// An interface for obtaining attestations and supporting data from the VM
 /// Instance RoT
 pub trait VmInstanceRot {
-    type Error;
+    type Error: error::Error + fmt::Debug;
 
     /// Get an attestation from each of the RoTs resident on the host platform
     /// qualified by the provided `QualifyingData`.

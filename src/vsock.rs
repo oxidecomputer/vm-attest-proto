@@ -83,6 +83,7 @@ impl VmInstanceRotVsockServer {
     }
 }
 
+#[derive(Debug)]
 pub struct VmInstanceRotVsockClient {
     socket: RefCell<VsockStream>,
 }
