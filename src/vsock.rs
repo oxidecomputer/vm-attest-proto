@@ -12,14 +12,14 @@ use vsock::{VsockListener, VsockStream};
 
 use crate::{
     PlatformAttestation, QualifyingData, VmInstanceRot,
-    mock::{VmInstanceRotMock, VmInstanceRotMockError}
+    mock::{VmInstanceRotMock, VmInstanceRotMockError},
 };
 
 // TODO: use a generic instead of `VsockListener` & combine w/
 // sock::VmInstanceRotSocketServer?
 pub struct VmInstanceRotVsockServer {
     mock: VmInstanceRotMock,
-    listener: VsockListener
+    listener: VsockListener,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -89,13 +89,15 @@ pub struct VmInstanceRotVsockClient {
 
 impl VmInstanceRotVsockClient {
     pub fn new(socket: VsockStream) -> Self {
-        Self { socket: RefCell::new(socket) }
+        Self {
+            socket: RefCell::new(socket),
+        }
     }
 }
 
 /// Errors returned when trying to sign an attestation
 #[derive(Debug, thiserror::Error)]
-pub enum VmInstanceAttestVsockClientError {
+pub enum VmInstanceRotVsockClientError {
     #[error("error deserializing a PlatformAttestation from JSON")]
     Deserialize(#[from] serde_json::Error),
 
@@ -104,7 +106,7 @@ pub enum VmInstanceAttestVsockClientError {
 }
 
 impl VmInstanceRot for VmInstanceRotVsockClient {
-    type Error = VmInstanceAttestVsockClientError;
+    type Error = VmInstanceRotVsockClientError;
 
     fn attest(
         &self,

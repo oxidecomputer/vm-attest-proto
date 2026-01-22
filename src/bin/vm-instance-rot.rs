@@ -24,7 +24,7 @@ mod config {
 #[derive(Debug, Subcommand)]
 enum SocketType {
     Unix {
-        sock: PathBuf
+        sock: PathBuf,
     },
     Vsock {
         #[clap(long, default_value_t = libc::VMADDR_CID_ANY)]
@@ -32,7 +32,7 @@ enum SocketType {
 
         #[clap(default_value_t = 1024)]
         port: u32,
-    }
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -43,7 +43,7 @@ struct Args {
     verbose: Verbosity<InfoLevel>,
 
     #[command(subcommand)]
-    socket_type: SocketType, 
+    socket_type: SocketType,
 }
 
 fn main() -> Result<()> {
@@ -80,12 +80,12 @@ fn main() -> Result<()> {
             }
             debug!("binding to sock file: {}", sock.display());
 
-            let listener =
-                UnixListener::bind(&sock).context("failed to bind to socket")?;
+            let listener = UnixListener::bind(&sock)
+                .context("failed to bind to socket")?;
             debug!("listening on socket file: {}", sock.display());
 
             Ok(VmInstanceRotSocketServer::new(attest, listener).run()?)
-        },
+        }
         SocketType::Vsock { cid, port } => {
             debug!("binding to vsock cid:port: ({cid}, {port})");
             let listener = VsockListener::bind(&VsockAddr::new(cid, port))
@@ -93,6 +93,6 @@ fn main() -> Result<()> {
             debug!("listening on cid,port: ({cid},{port})");
 
             Ok(VmInstanceRotVsockServer::new(attest, listener).run()?)
-        },
+        }
     }
 }
