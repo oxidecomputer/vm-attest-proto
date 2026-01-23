@@ -45,18 +45,24 @@ struct Args {
     #[command(flatten)]
     verbose: Verbosity<InfoLevel>,
 
+    /// The root certificate(s) used for verifying cert chains from the RoT
     #[clap(long)]
     root_cert: Option<PathBuf>,
 
     #[clap(long, default_value_t = false)]
     self_signed: bool,
 
+    /// Reference integrity measurements in CoRIM documents that identify the
+    /// various software components that we trust
     #[clap(long)]
     reference_measurements: Vec<PathBuf>,
 
+    /// Reference integrity measurements in a JSON structure that identify the
+    /// expected UUID & boot disk digest
     #[clap(long)]
     vm_instance_cfg: PathBuf,
 
+    /// The IP address of the VM that we're challenging for an attestation
     address: String,
 }
 
