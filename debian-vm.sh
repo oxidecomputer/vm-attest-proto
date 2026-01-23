@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ ! $# -ge 1 ]; then
+    >&2 echo "disk image name is required"
+    exit 1
+fi
+
+NAME="$1"
+QCOW_FILE="$NAME".qcow2
+
+if [ $# -ne 2 ]; then
+    >&2 echo "macaddr assigned to VM is required"
+    exit 1
+fi
+
+MACADDR="$2"
+
+# assumes pwd is `vm-attest-proto` src dir
+cargo build --bin vm-instance
+
+VM_INSTANCE_BIN=target/debug/vm-instance
+if [ ! -e "$VM_INSTANCE_BIN" ]; then
+    >&2 echo "missing required file: $VM_INSTANCE_BIN"
+    exit 1
+fi
+
+qemu-img create -f qcow2 "$QCOW_FILE" 10G
+
+sudo modprobe nbd
+
+# TODO: dynamically assign `nbd`
+sudo qemu-nbd -c /dev/nbd0 "$QCOW_FILE"
+
+sudo parted -s -a optimal -- /dev/nbd0 \
+  mklabel gpt \
+  mkpart primary fat32 1MiB 256MiB \
+  mkpart primary ext4 256MiB -0 \
+  name 1 uefi \
+  name 2 root \
+  set 1 esp on
+
+sudo mkfs -t fat -F 32 -n EFI /dev/nbd0p1
+sudo mkfs -t ext4 -L root /dev/nbd0p2
+
+ROOT_UUID=$(sudo blkid | grep '^/dev/nbd0' | grep ' LABEL="root" ' | grep -o ' UUID="[^"]\+"' | sed -e 's/^ //')
+EFI_UUID=$(sudo blkid | grep '^/dev/nbd0' | grep ' LABEL="EFI" ' | grep -o ' UUID="[^"]\+"' | sed -e 's/^ //')
+
+BOOTSTRAP_ROOT="bootstrap-root"
+mkdir "$BOOTSTRAP_ROOT"
+sudo mount "$ROOT_UUID" "$BOOTSTRAP_ROOT"
+
+# do the `debootstrap` thing
+sudo debootstrap --arch amd64 stable "$BOOTSTRAP_ROOT" http://ftp.us.debian.org/debian
+
+sudo mount -o bind,ro /dev "$BOOTSTRAP_ROOT"/dev
+sudo mount -t proc /proc "$BOOTSTRAP_ROOT"/proc
+sudo mount -t sysfs none "$BOOTSTRAP_ROOT"/sys
+
+sudo LANG=C.UTF-8 chroot "$BOOTSTRAP_ROOT" /bin/bash -x <<EOS
+set -euo pipefail
+
+cat <<EOF > /etc/fstab
+$ROOT_UUID / ext4 errors=remount-ro 0 1
+$EFI_UUID /boot/efi vfat defaults 0 1
+EOF
+
+[[ -d /boot/efi ]] || mkdir /boot/efi
+mount -a
+
+# TODO: accept macaddr as a parameter
+cat <<EOF > /etc/systemd/network/50-vm-eth.link
+[Match]
+MACAddress=$MACADDR
+
+[Link]
+Name=eth0
+EOF
+
+cat <<EOF > /etc/network/interfaces
+auto lo
+iface lo inet loopback
+
+allow-hotplug eth0
+iface eth0 inet dhcp
+EOF
+
+echo "vm-instance" > /etc/hostname
+
+cat <<EOF > /etc/hosts
+127.0.0.1       localhost
+127.0.1.1       vm-instance
+
+# The following lines are desirable for IPv6 capable hosts
+::1     localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+EOF
+
+debconf-set-selections <<EOF
+tzdata tzdata/Areas select America
+tzdata tzdata/Zones/America select Los_Angeles
+EOF
+
+# This is necessary as tzdata will assume these are manually set and override the
+# debconf values with their settings
+rm -f /etc/localtime /etc/timezone
+DEBCONF_NONINTERACTIVE_SEEN=true dpkg-reconfigure -f noninteractive tzdata
+
+apt-get update
+
+debconf-set-selections <<EOF
+locales locales/locales_to_be_generated multiselect en_US.UTF-8 UTF-8
+locales locales/default_environment_locale select en_US.UTF-8
+EOF
+
+# Stop anything overriding debconf's settings
+rm -f /etc/default/locale /etc/locale.gen /etc/default/keyboard
+DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes locales linux-image-amd64 grub-efi-amd64
+
+# Add console=ttyS0 so we get early boot messages on the serial console.
+sed -i -e 's/^\\(GRUB_CMDLINE_LINUX="[^"]*\\)"$/\\1 console=ttyS0"/' /etc/default/grub
+
+# Tell GRUB to use the serial console
+cat - >>/etc/default/grub <<EOF
+GRUB_TERMINAL="serial"
+GRUB_SERIAL_COMMAND="serial --unit=0 --speed=9600 --stop=1"
+EOF
+
+grub-install --target=x86_64-efi
+update-grub
+
+# Copy the fallback bootloader to the default bootloader location.
+# When we first boot our VM we will need this to initialise the boot options
+# in the nvram:
+mkdir /boot/efi/EFI/BOOT
+cp /boot/efi/EFI/debian/fbx64.efi /boot/efi/EFI/BOOT/bootx64.efi
+
+systemctl enable serial-getty@ttyS0.service
+echo root:password | chpasswd
+apt-get clean
+
+cat <<EOF > /etc/systemd/system/vm-instance.service
+[Unit]
+Description=A simple daemon service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/vm-instance --retry --address "0.0.0.0:6666" vsock
+Restart=always
+Type=simple
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable vm-instance.service
+
+# no fancy tmpfs / overlayfs stuff, just read-only rootfs
+# this produces a few errors on boot but none are fatal
+cat <<EOF > /etc/fstab
+$ROOT_UUID / ext4 defaults,ro 0 1
+$EFI_UUID /boot/efi vfat defaults 0 1
+EOF
+
+EOS
+
+sudo cp "$VM_INSTANCE_BIN" "$BOOTSTRAP_ROOT"/usr/local/bin
+
+MNTS="dev proc sys"
+for MNT in $MNTS; do
+    sudo umount "$BOOTSTRAP_ROOT"/"$MNT"
+done
+
+EFI_ROOT="$BOOTSTRAP_ROOT"/boot/efi
+
+sudo fstrim -v "$EFI_ROOT"
+sudo fstrim -v "$BOOTSTRAP_ROOT"
+
+sudo umount "$EFI_ROOT" "$BOOTSTRAP_ROOT"
+rmdir "$BOOTSTRAP_ROOT"
+
+sudo qemu-nbd -d /dev/nbd0
+
+virt-sparsify --in-place "$QCOW_FILE"
