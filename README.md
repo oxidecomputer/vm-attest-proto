@@ -45,6 +45,11 @@ The test module again relies on static data found in:
 These files are plain text specifications of the PKI and measurement log.
 Before they are useful to the Oxide platform mock impl they must be processed to generate keys and encodings of various structures.
 
+### Demo Tools
+
+A demo environment can be created using the tools in `src/bin/` and optionally the VM produced by the `debian-vm.sh` script.
+See [src/bin/README.md](src/bin/README.md)
+
 ## build.rs
 
 The `build.rs` file in this repo is responsible for generating data used by the mock impls in this repo and putting the generated data in a place the library can find it.

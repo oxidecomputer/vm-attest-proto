@@ -20,10 +20,12 @@ use vm_attest_trait::{
 
 #[derive(Debug, Subcommand)]
 enum SocketType {
+    /// Connect to `vm-instance-rot` as a client on a unix domain socket
     Unix {
         // path to unix socket file
         sock: PathBuf,
     },
+    /// Connect to `vm-instance-rot` as a client on a vsock
     Vsock {
         // port to listen on
         #[clap(default_value_t = 1024)]
@@ -31,6 +33,9 @@ enum SocketType {
     },
 }
 
+/// This is a tool implements the minimal behavior we expect of the software
+/// running in a virtual machine. It connects to the `vm-instance-rot` as a
+/// client while accepting challenges from the `appraiser` over TCP.
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
@@ -38,7 +43,7 @@ struct Args {
     #[command(flatten)]
     verbose: Verbosity<InfoLevel>,
 
-    // Address used for server that listens for challenges
+    /// Address used for server that listens for challenges
     #[clap(long, default_value_t = String::from("localhost:6666"))]
     address: String,
 

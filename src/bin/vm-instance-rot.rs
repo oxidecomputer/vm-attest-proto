@@ -23,18 +23,23 @@ mod config {
 
 #[derive(Debug, Subcommand)]
 enum SocketType {
-    Unix {
-        sock: PathBuf,
-    },
+    /// Listen for messages on a unix domain socket
+    Unix { sock: PathBuf },
+    /// Listen for messages on the host side of a vsock
     Vsock {
+        /// Accept connections from this specific context ID
         #[clap(long, default_value_t = libc::VMADDR_CID_ANY)]
         cid: u32,
 
+        /// Port to listen on
         #[clap(default_value_t = 1024)]
         port: u32,
     },
 }
 
+/// This is a mock implementation of the root of trust exposed to a virtual
+/// machine (VM). It runs locally in a process accepting requests on either
+/// a unix domain socket or on the host side of a vsock.
 #[derive(Debug, Parser)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
@@ -42,6 +47,7 @@ struct Args {
     #[command(flatten)]
     verbose: Verbosity<InfoLevel>,
 
+    /// The type of the socket to listen on
     #[command(subcommand)]
     socket_type: SocketType,
 }
