@@ -50,6 +50,17 @@ Before they are useful to the Oxide platform mock impl they must be processed to
 A demo environment can be created using the tools in `src/bin/` and optionally the VM produced by the `debian-vm.sh` script.
 See [src/bin/README.md](src/bin/README.md)
 
+## Building on illumos
+
+This repo uses [vsock](https://docs.rs/vsock/latest/vsock/), which does not have
+illumos support. To build the bits without vsock (e.g. the VM RoT), run:
+
+```bash
+
+$ cargo build --no-default-features
+
+```
+
 ## build.rs
 
 The `build.rs` file in this repo is responsible for generating data used by the mock impls in this repo and putting the generated data in a place the library can find it.
