@@ -7,6 +7,7 @@ use std::{error, fmt};
 
 pub mod mock;
 pub mod socket;
+#[cfg(feature = "vsock")]
 pub mod vsock;
 
 /// User chosen value. Probably random data. Must not be reused.

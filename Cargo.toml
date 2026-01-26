@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 license = "MPL-2.0"
 
+[features]
+default = ["vsock"]
+vsock = ["dep:vsock"]
+
 [dependencies]
 anyhow = "1.0.100"
 attest-data.git = "https://github.com/oxidecomputer/dice-util"
@@ -25,8 +29,28 @@ serde_json = "1.0.145"
 sha2 = "0.10.9"
 thiserror = "2.0.17"
 uuid = { version = "1.18.1", features = ["std", "serde"] }
-vsock = "0.5.2"
+vsock = { version = "0.5.2", optional = true }
 x509-cert = "0.2.5"
 
 [build-dependencies]
 anyhow.version = "1.0.100"
+
+[[bin]]
+name = "vsock-client"
+path = "src/bin/vsock-client.rs"
+required-features = ["vsock"]
+
+[[bin]]
+name = "vsock-server"
+path = "src/bin/vsock-server.rs"
+required-features = ["vsock"]
+
+[[bin]]
+name = "vm-instance"
+path = "src/bin/vm-instance.rs"
+required-features = ["vsock"]
+
+[[bin]]
+name = "vm-instance-rot"
+path = "src/bin/vm-instance-rot.rs"
+required-features = ["vsock"]
