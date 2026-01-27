@@ -2,10 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use dice_verifier::{
-    MeasurementSetError, Nonce, PkiPathSignatureVerifierError,
-    VerifyAttestationError, VerifyMeasurementsError,
-};
+use dice_verifier::Nonce;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,11 +12,10 @@ use std::{
     net::{TcpListener, TcpStream},
     ops::DerefMut,
     os::unix::net::{UnixListener, UnixStream},
-    str::Utf8Error,
 };
 
 use crate::{
-    PlatformAttestation, QualifyingData, RotType, VmInstanceRot,
+    PlatformAttestation, QualifyingData, VmInstanceRot,
     mock::{VmInstanceRotMock, VmInstanceRotMockError},
 };
 
@@ -240,44 +236,11 @@ pub struct AttestedKey {
 /// Possible errors from `VmInstanceAttestSocketServer::run`
 #[derive(Debug, thiserror::Error)]
 pub enum VmInstanceTcpError {
-    #[error("attestation verification failed")]
-    AttestationVerification(#[from] VerifyAttestationError),
-
-    #[error("attestation verification failed")]
-    CertChainVerification(#[from] PkiPathSignatureVerifierError),
-
-    #[error("failed to parse Cert from DER")]
-    CertFromDer(#[from] x509_cert::der::Error),
-
-    #[error("failed to deserialize hubpacked message")]
-    Hubpack(#[from] hubpack::Error),
-
-    #[error("failed to generate Nonce")]
-    Nonce(#[from] attest_data::AttestDataError),
-
     #[error("error converting type with serde")]
     Serialization(#[from] serde_json::Error),
 
     #[error("error from the underlying socket")]
     Socket(#[from] std::io::Error),
-
-    #[error("error verifying VmInstance measurements")]
-    VmInstanceVerification,
-
-    #[error("failed to verify measurements from Oxide Platform RoT")]
-    PlatformLogAppraisal(#[from] VerifyMeasurementsError),
-
-    #[error("failed to create MeasurementSet from artifacts")]
-    MeasurementSet(#[from] MeasurementSetError),
-
-    #[error("attestation from server is missing a required measurement log")]
-    MissingMeasurementLog(RotType),
-
-    #[error("verified root has a malformed CN")]
-    InvalidCn(#[from] Utf8Error),
-
-    #[error("no CN found in verified root cert")]
-    NoCn,
 }
 
 pub struct VmInstanceTcp {
