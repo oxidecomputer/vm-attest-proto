@@ -14,7 +14,7 @@ use std::{
 use vsock::{VMADDR_CID_HOST, VsockAddr, VsockStream};
 
 use vm_attest_trait::{
-    socket::{VmInstanceRotSocket, VmInstanceTcpServer},
+    socket::{VmInstanceRotSocketClient, VmInstanceTcpServer},
     vsock::VmInstanceRotVsockClient,
 };
 
@@ -71,7 +71,7 @@ fn main() -> Result<()> {
             let stream = UnixStream::connect(&sock)
                 .context("connect to domain socket")?;
             debug!("connected to VmInstanceRotServer socket");
-            let vm_instance_rot = VmInstanceRotSocket::new(stream);
+            let vm_instance_rot = VmInstanceRotSocketClient::new(stream);
 
             let challenge_listener = TcpListener::bind(&args.address)
                 .context("bind to TCP socket")?;

@@ -15,8 +15,9 @@ use crate::{
     mock::{VmInstanceRotMock, VmInstanceRotMockError},
 };
 
-// TODO: use a generic instead of `VsockListener` & combine w/
-// sock::VmInstanceRotSocketServer?
+/// This type is an implementation of a `VmInstanceRot` that listens for
+/// connections on a vsock. It receives JSON messages that encode the sole
+/// parameter to the `VmInstanceRot::attest` function.
 pub struct VmInstanceRotVsockServer {
     mock: VmInstanceRotMock,
     listener: VsockListener,
