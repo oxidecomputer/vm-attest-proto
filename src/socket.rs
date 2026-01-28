@@ -165,11 +165,22 @@ impl VmInstanceRotSocketServer {
     }
 }
 
+/// This enumeration represents the response message sent from one of the
+/// `VmInstanceTcpServer`
+#[derive(Debug, Deserialize, Serialize)]
+pub enum VmResponse {
+    Success(AttestedKey),
+    Error(String),
+}
+
 /// Possible errors from `VmInstanceAttestSocketServer::run`
 #[derive(Debug, thiserror::Error)]
 pub enum VmInstanceTcpServerError<T: VmInstanceRot> {
-    #[error("error converting type with serde")]
-    Serialization(#[from] serde_json::Error),
+    #[error("failed to deserialize Nonce request from JSON")]
+    Request(serde_json::Error),
+
+    #[error("failed to serialize Response to JSON")]
+    Response(#[from] serde_json::Error),
 
     #[error("error from the underlying socket")]
     Socket(#[from] std::io::Error),
@@ -214,7 +225,19 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
                 }
 
                 debug!("nonce received: {msg}");
-                let nonce: Nonce = serde_json::from_str(&msg)?;
+                let result: Result<Nonce, serde_json::Error> =
+                    serde_json::from_str(&msg);
+                let nonce = match result {
+                    Ok(q) => q,
+                    Err(e) => {
+                        let response = VmResponse::Error(e.to_string());
+                        let mut response = serde_json::to_string(&response)?;
+                        response.push('\n');
+                        debug!("sending error response: {response}");
+                        client.write_all(response.as_bytes())?;
+                        return Err(VmInstanceTcpServerError::Request(e));
+                    }
+                };
                 debug!("nonce decoded: {nonce:?}");
 
                 //   - generate `public_key`
@@ -230,19 +253,31 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
 
                 //   - get `attestation` from `VmInstanceRot` by passing
                 //     `qualifying_data` to VmInstanceRot through
-                //     `VmInstanceRotSocket::attest`
                 let platform_attestation =
-                    self.vm_instance_rot.attest(&qualifying_data).map_err(
-                        VmInstanceTcpServerError::<T>::VmInstanceRotError,
-                    )?;
+                    match self.vm_instance_rot.attest(&qualifying_data) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            let response = VmResponse::Error(e.to_string());
+                            let mut response =
+                                serde_json::to_string(&response)?;
+                            response.push('\n');
+                            debug!("sending error response: {response}");
+                            client.write_all(response.as_bytes())?;
+                            return Err(
+                                VmInstanceTcpServerError::VmInstanceRotError(e),
+                            );
+                        }
+                    };
 
                 let attested_key = AttestedKey {
                     attestation: platform_attestation,
                     public_key: user_data,
                 };
 
+                let response = VmResponse::Success(attested_key);
+
                 //   - return `attestation` + `public_key`
-                let mut response = serde_json::to_string(&attested_key)?;
+                let mut response = serde_json::to_string(&response)?;
                 response.push('\n');
 
                 debug!("sending response: {response}");
@@ -269,6 +304,9 @@ pub enum VmInstanceTcpError {
 
     #[error("error from the underlying socket")]
     Socket(#[from] std::io::Error),
+
+    #[error("error propagated from the VmInstance")]
+    VmInstance(String),
 }
 
 /// This type wraps the client side of a TCP connection / stream.
@@ -300,6 +338,10 @@ impl VmInstanceTcp {
         reader.read_line(&mut response)?;
         debug!("got attesetd key: {response}");
 
-        Ok(serde_json::from_str(&response)?)
+        let response: VmResponse = serde_json::from_str(&response)?;
+        match response {
+            VmResponse::Success(a) => Ok(a),
+            VmResponse::Error(e) => Err(VmInstanceTcpError::VmInstance(e)),
+        }
     }
 }
