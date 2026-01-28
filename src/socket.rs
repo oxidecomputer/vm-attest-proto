@@ -19,14 +19,15 @@ use crate::{
     mock::{VmInstanceRotMock, VmInstanceRotMockError},
 };
 
-// This type is used by software within the VM instance to send commands and
-// get responses from an implementation of the VmInstanceRot over a socket
+/// This type wraps the client side of a `UnixStream` socket.
+/// The service side should be an instance of the `VmInstanceRotSocketServer`
+/// type.
 #[derive(Debug)]
-pub struct VmInstanceRotSocket {
+pub struct VmInstanceRotSocketClient {
     socket: RefCell<UnixStream>,
 }
 
-impl VmInstanceRotSocket {
+impl VmInstanceRotSocketClient {
     pub fn new(socket: UnixStream) -> Self {
         Self {
             socket: RefCell::new(socket),
@@ -36,7 +37,7 @@ impl VmInstanceRotSocket {
 
 /// Errors returned when trying to sign an attestation
 #[derive(Debug, thiserror::Error)]
-pub enum VmInstanceAttestSocketError {
+pub enum VmInstanceRotSocketClientError {
     #[error("error deserializing a Command from JSON")]
     CommandDeserialize(#[from] serde_json::Error),
 
@@ -44,11 +45,12 @@ pub enum VmInstanceAttestSocketError {
     Socket(#[from] std::io::Error),
 }
 
-impl VmInstanceRot for VmInstanceRotSocket {
-    type Error = VmInstanceAttestSocketError;
+impl VmInstanceRot for VmInstanceRotSocketClient {
+    type Error = VmInstanceRotSocketClientError;
 
-    // serialize parames into message structure representing the
-    // VmInstanceAttester::attest function
+    /// Turn the `QualifyingData` provided into a JSON message that we send
+    /// over the socket. We get back a `PlatformAttestation` that we
+    /// deserialize from JSON.
     fn attest(
         &self,
         qualifying_data: &QualifyingData,
@@ -73,8 +75,9 @@ impl VmInstanceRot for VmInstanceRotSocket {
     }
 }
 
-/// This type acts as a socket server accepting encoded messages that
-/// correspond to functions from the VmInstanceAttester.
+/// This type raps a UnixListener accepting JSON encoded messages /
+/// `QualifyingData` from the `VmInstanceRotSocketClient`. The `QualifyingData`
+/// is passed to an instance of the `VmInstanceRotMock`.
 pub struct VmInstanceRotSocketServer {
     mock: VmInstanceRotMock,
     listener: UnixListener,
@@ -155,8 +158,12 @@ pub enum VmInstanceTcpServerError<T: VmInstanceRot> {
     VmInstanceRotError(<T as VmInstanceRot>::Error),
 }
 
-/// This type acts as a socket server accepting encoded messages that
-/// correspond to functions from the VmInstanceAttester.
+/// This type wraps a TcpListener accepting JSON encoded `Nonce`s from a
+/// challenger / `VmInstanceTcpClient`. It is intended to be run within a
+/// (mock) vm instance. For each challenge / `Nonce` received this type will
+/// generate some data (local to the VM) and hash the two together. This
+/// `QualifyingData` is then sent down to the `VmInstanceRot` by way of the
+/// `vm_instance_rot` member.
 pub struct VmInstanceTcpServer<T: VmInstanceRot> {
     challenge_listener: TcpListener,
     vm_instance_rot: T,
@@ -243,6 +250,8 @@ pub enum VmInstanceTcpError {
     Socket(#[from] std::io::Error),
 }
 
+/// This type wraps the client side of a TCP connection / stream.
+/// The server side should be an instance of the `VmInstanceTcpServer`.
 pub struct VmInstanceTcp {
     stream: TcpStream,
 }
@@ -252,6 +261,8 @@ impl VmInstanceTcp {
         Self { stream }
     }
 
+    /// Send a nonce to the `VmInstanceTcpServer`, get back an `AttestedKey`
+    /// that we deserialize from JSON.
     pub fn attest_key(
         &mut self,
         nonce: &Nonce,

@@ -52,7 +52,6 @@ pub struct MeasurementLog {
     pub data: Vec<u8>,
 }
 
-// TODO: bundle all required data in a single response
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PlatformAttestation {
     // the attestation from the Oxide Platform RoT
