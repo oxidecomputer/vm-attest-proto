@@ -15,7 +15,7 @@ use std::{
 };
 
 use crate::{
-    PlatformAttestation, QualifyingData, VmInstanceRot,
+    PlatformAttestation, QualifyingData, Response, VmInstanceRot,
     mock::{VmInstanceRotMock, VmInstanceRotMockError},
 };
 
@@ -43,6 +43,9 @@ pub enum VmInstanceRotSocketClientError {
 
     #[error("error from the underlying socket")]
     Socket(#[from] std::io::Error),
+
+    #[error("error from the VmInstanceRot")]
+    VmInstanceRot(String),
 }
 
 impl VmInstanceRot for VmInstanceRotSocketClient {
@@ -69,9 +72,12 @@ impl VmInstanceRot for VmInstanceRotSocketClient {
         reader.read_line(&mut response)?;
 
         debug!("got response: {response}");
-        let attestation: PlatformAttestation = serde_json::from_str(&response)?;
-
-        Ok(attestation)
+        // map `Response` to `Result<PlatformAttestation, Self::Error>`
+        let response: Response = serde_json::from_str(&response)?;
+        match response {
+            Response::Success(p) => Ok(p),
+            Response::Error(e) => Err(Self::Error::VmInstanceRot(e)),
+        }
     }
 }
 
@@ -89,14 +95,14 @@ pub enum VmInstanceRotSocketRunError {
     #[error("error from underlying VmInstanceRoT mock")]
     MockRotError(#[from] VmInstanceRotMockError),
 
-    #[error("error deserializing Command from JSON")]
-    CommandDeserialize(#[from] serde_json::Error),
+    #[error("failed to deserialize QualifyingData request from JSON")]
+    Request(serde_json::Error),
+
+    #[error("failed to serialize Response to JSON")]
+    Response(#[from] serde_json::Error),
 
     #[error("error from the underlying socket")]
     Socket(#[from] std::io::Error),
-
-    #[error("error deserializing data")]
-    Serialize,
 }
 
 impl VmInstanceRotSocketServer {
@@ -125,14 +131,28 @@ impl VmInstanceRotSocketServer {
                 }
 
                 debug!("string received: {msg}");
-                let qualifying_data: QualifyingData =
-                    serde_json::from_str(&msg)?;
+                let result: Result<QualifyingData, serde_json::Error> =
+                    serde_json::from_str(&msg);
+                let qualifying_data = match result {
+                    Ok(q) => q,
+                    Err(e) => {
+                        let response = Response::Error(e.to_string());
+                        let mut response = serde_json::to_string(&response)?;
+                        response.push('\n');
+                        debug!("sending error response: {response}");
+                        client.write_all(response.as_bytes())?;
+                        return Err(VmInstanceRotSocketRunError::Request(e));
+                    }
+                };
+
                 debug!("qualifying data received: {qualifying_data:?}");
 
-                let platform_attestation =
-                    self.mock.attest(&qualifying_data)?;
-                let mut response =
-                    serde_json::to_string(&platform_attestation)?;
+                let response = match self.mock.attest(&qualifying_data) {
+                    Ok(a) => Response::Success(a),
+                    Err(e) => Response::Error(e.to_string()),
+                };
+
+                let mut response = serde_json::to_string(&response)?;
                 response.push('\n');
 
                 debug!("sending response: {response}");
@@ -234,6 +254,7 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
         Ok(())
     }
 }
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AttestedKey {
     pub attestation: PlatformAttestation,

@@ -77,6 +77,14 @@ pub struct PlatformAttestation {
     pub measurement_logs: Vec<MeasurementLog>,
 }
 
+/// This enumeration represents the response message returned by the
+/// `VmInstanceRot` in response to the `attest` function / message.
+#[derive(Debug, Deserialize, Serialize)]
+pub enum Response {
+    Success(PlatformAttestation),
+    Error(String),
+}
+
 /// An interface for obtaining attestations and supporting data from the VM
 /// Instance RoT
 pub trait VmInstanceRot {
