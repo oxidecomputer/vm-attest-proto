@@ -137,10 +137,8 @@ fn appraise_platform_attestation(
 
     // smuggle this data into the `verify_attestation` function in the
     // `attest_data::Nonce` type
-    let qualifying_data = qdata.finalize();
-    let qualifying_data = Nonce {
-        0: qualifying_data.into(),
-    };
+    let qualifying_data =
+        Nonce::N32(attest_data::Array(qdata.finalize().into()));
 
     // get the log from the Oxide platform RoT
     let oxlog = attestation
@@ -317,7 +315,7 @@ fn main() -> Result<()> {
 
             let mut vm_instance = VmInstanceTcp::new(stream);
             // send Nonce to server
-            let nonce = Nonce::from_platform_rng()?;
+            let nonce = Nonce::from_platform_rng(32)?;
             let attested_key =
                 vm_instance.attest_key(&nonce).context("get attested key")?;
 
