@@ -5,7 +5,7 @@
 use attest_data::AttestDataError as OxAttestDataError;
 use dice_verifier::{
     Attest as OxAttest, AttestError as OxAttestError,
-    Attestation as OxAttestation, Log,
+    Attestation as OxAttestation, Log, Nonce,
 };
 use hubpack::SerializedSize;
 use serde::{Deserialize, Serialize};
@@ -83,11 +83,10 @@ impl VmInstanceRot for VmInstanceRotMock {
         // structure
         msg.update(instance_cfg.as_bytes());
         msg.update(qualifying_data);
-        let msg = msg.finalize();
 
-        // smuggle the updated qualifying data through the `attest_data::Nonce`
+        // smuggle the updated qualifying data through the `Nonce`
         // type down to the Oxide Platform RoT
-        let nonce = attest_data::Nonce { 0: msg.into() };
+        let nonce = Nonce::N32(attest_data::Array(msg.finalize().into()));
         let attest = self.oxattest_mock.attest(&nonce)?;
 
         // serialize the attestation back to hubpack
@@ -171,7 +170,7 @@ mod test {
         // roll in a nonce
         // NOTE: in practice this will come from an external challenger
         let nonce =
-            Nonce::from_platform_rng().expect("Nonce from platform RNG");
+            Nonce::from_platform_rng(32).expect("Nonce from platform RNG");
         digest.update(&nonce);
 
         // roll in some data from the client / VM
@@ -259,9 +258,8 @@ mod test {
 
         // smuggle the qualifying data from the VmInstanceRot down to the
         // oxide platform RoT through the `attest_data::Nonce`
-        let data_digest = attest_data::Nonce {
-            0: vm_rot_qualifying_data.into_inner(),
-        };
+        let data_digest =
+            Nonce::N32(attest_data::Array(vm_rot_qualifying_data.into_inner()));
 
         // get the log from the Oxide platform RoT
         let oxlog = plat_attest.measurement_logs.iter().find_map(|log| {
