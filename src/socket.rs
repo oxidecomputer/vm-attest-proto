@@ -327,7 +327,9 @@ impl VmInstanceTcp {
         nonce: &Nonce,
     ) -> Result<AttestedKey, VmInstanceTcpError> {
         debug!("generated nonce: {nonce:?}");
-        let mut nonce = serde_json::to_string(&nonce)?;
+        let mut nonce = match nonce {
+            Nonce::N32(a) => serde_json::to_string(&a)?,
+        };
         nonce.push('\n');
         self.stream.write_all(nonce.as_bytes())?;
         debug!("nonce sent to vm instance");
