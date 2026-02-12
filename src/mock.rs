@@ -65,11 +65,10 @@ impl VmInstanceRotMock {
 impl VmInstanceRot for VmInstanceRotMock {
     type Error = VmInstanceRotMockError;
 
-    /// `propolis` receives the nonce & user data from the caller.
-    /// It then combines this data w/ attributes describing the VM (rootfs,
-    /// instance UUID etc) and attestations from other RoTs on the platform.
-    /// The format of each attestation is dependent on the associated `RotType`.
-    /// NOTE: the order of the attestations returned is significant
+    /// `propolis` receives qualifying data from the caller. It then combines
+    /// this data w/ attributes describing the VM (rootfs, instance UUID etc)
+    /// and attestations from other RoTs on the platform. The format of each
+    /// attestation is dependent on the associated `RotType`.
     fn attest(
         &self,
         qualifying_data: &QualifyingData,
@@ -169,8 +168,8 @@ mod test {
 
         // roll in a nonce
         // NOTE: in practice this will come from an external challenger
-        let nonce =
-            Nonce::from_platform_rng(32).expect("Nonce from platform RNG");
+        let nonce = QualifyingData::from_platform_rng()
+            .expect("QualifyingData from platform RNG");
         digest.update(&nonce);
 
         // roll in some data from the client / VM
@@ -181,7 +180,6 @@ mod test {
         digest.update(&user_data);
 
         // wrap the digest in the type expected by the VmInstanceRot interface
-        //let digest: [u8; 32] = digest.finalize().into();
         QualifyingData::from(Into::<[u8; 32]>::into(digest.finalize()))
     }
 
