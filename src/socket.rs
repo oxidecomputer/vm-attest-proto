@@ -3,12 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use dice_verifier::Nonce;
-use log::debug;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     ops::DerefMut,
     os::unix::net::{UnixListener, UnixStream},
@@ -18,6 +18,9 @@ use crate::{
     PlatformAttestation, QualifyingData, Response, VmInstanceRot,
     mock::{VmInstanceRotMock, VmInstanceRotMockError},
 };
+
+/// the maximum length of a message that we'll accept from clients
+const MAX_LINE_LENGTH: usize = 1024;
 
 /// This type wraps the client side of a `UnixStream` socket.
 /// The service side should be an instance of the `VmInstanceRotSocketServer`
@@ -119,14 +122,32 @@ impl VmInstanceRotSocketServer {
             debug!("new client");
 
             // `incoming` yeilds iterator over a Result
-            let mut client = client?;
+            // we should only receive `QualifyingData` over this interface so
+            // we can limit the line length to something reasonable
+            let reader = BufReader::with_capacity(MAX_LINE_LENGTH, client?);
+            let mut reader = reader.take(MAX_LINE_LENGTH as u64);
             loop {
-                // would like to do this before `loop` but we need to write to
-                // the client as well
-                let mut reader = BufReader::new(&mut client);
                 let count = reader.read_line(&mut msg)?;
                 if count == 0 {
                     debug!("read 0 bytes: EOF");
+                    break;
+                }
+
+                // detect receipt of a message longer than the max
+                if count == MAX_LINE_LENGTH && !msg.ends_with('\n') {
+                    warn!(
+                        "Error: Line length exceeded the limit of {} bytes.",
+                        MAX_LINE_LENGTH
+                    );
+                    let response =
+                        Response::Error("Request too long".to_string());
+                    let mut response = serde_json::to_string(&response)?;
+                    response.push('\n');
+                    debug!("sending error response: {response}");
+                    reader
+                        .get_mut()
+                        .get_mut()
+                        .write_all(response.as_bytes())?;
                     break;
                 }
 
@@ -140,7 +161,10 @@ impl VmInstanceRotSocketServer {
                         let mut response = serde_json::to_string(&response)?;
                         response.push('\n');
                         debug!("sending error response: {response}");
-                        client.write_all(response.as_bytes())?;
+                        reader
+                            .get_mut()
+                            .get_mut()
+                            .write_all(response.as_bytes())?;
                         return Err(VmInstanceRotSocketRunError::Request(e));
                     }
                 };
@@ -156,7 +180,7 @@ impl VmInstanceRotSocketServer {
                 response.push('\n');
 
                 debug!("sending response: {response}");
-                client.write_all(response.as_bytes())?;
+                reader.get_mut().get_mut().write_all(response.as_bytes())?;
                 msg.clear();
             }
         }
@@ -213,14 +237,31 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
         for client in self.challenge_listener.incoming() {
             debug!("new client");
 
-            let mut client = client?;
+            let reader = BufReader::with_capacity(MAX_LINE_LENGTH, client?);
+            let mut reader = reader.take(MAX_LINE_LENGTH as u64);
             loop {
-                let mut reader = BufReader::new(&mut client);
-
-                //   - read nonce from stream (JSON)
+                // read Nonce from stream (JSON)
                 let count = reader.read_line(&mut msg)?;
                 if count == 0 {
                     debug!("read 0 bytes: EOF");
+                    break;
+                }
+
+                // detect receipt of a message longer than the max
+                if count == MAX_LINE_LENGTH && !msg.ends_with('\n') {
+                    warn!(
+                        "Error: Line length exceeded the limit of {} bytes.",
+                        MAX_LINE_LENGTH
+                    );
+                    let response =
+                        Response::Error("Request too long".to_string());
+                    let mut response = serde_json::to_string(&response)?;
+                    response.push('\n');
+                    debug!("sending error response: {response}");
+                    reader
+                        .get_mut()
+                        .get_mut()
+                        .write_all(response.as_bytes())?;
                     break;
                 }
 
@@ -234,7 +275,10 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
                         let mut response = serde_json::to_string(&response)?;
                         response.push('\n');
                         debug!("sending error response: {response}");
-                        client.write_all(response.as_bytes())?;
+                        reader
+                            .get_mut()
+                            .get_mut()
+                            .write_all(response.as_bytes())?;
                         return Err(VmInstanceTcpServerError::Request(e));
                     }
                 };
@@ -262,7 +306,10 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
                                 serde_json::to_string(&response)?;
                             response.push('\n');
                             debug!("sending error response: {response}");
-                            client.write_all(response.as_bytes())?;
+                            reader
+                                .get_mut()
+                                .get_mut()
+                                .write_all(response.as_bytes())?;
                             return Err(
                                 VmInstanceTcpServerError::VmInstanceRotError(e),
                             );
@@ -281,7 +328,7 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
                 response.push('\n');
 
                 debug!("sending response: {response}");
-                client.write_all(response.as_bytes())?;
+                reader.get_mut().get_mut().write_all(response.as_bytes())?;
                 msg.clear();
             }
         }
