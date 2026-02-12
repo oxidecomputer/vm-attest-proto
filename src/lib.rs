@@ -15,6 +15,10 @@ pub mod vsock;
 pub struct QualifyingData([u8; 32]);
 
 impl QualifyingData {
+    /// When challenging a platform for an attestation the challenger will
+    /// typically want to include random qualifying data (a nonce) in their
+    /// challenge. This function uses the RNG from `getrandom` to generate
+    /// such qualifying data.
     pub fn from_platform_rng() -> Result<Self, getrandom::Error> {
         let mut nonce = [0u8; 32];
         getrandom::fill(&mut nonce[..])?;
@@ -35,8 +39,8 @@ impl AsRef<[u8]> for QualifyingData {
 }
 
 impl From<[u8; 32]> for QualifyingData {
-    fn from(nonce: [u8; 32]) -> Self {
-        Self(nonce)
+    fn from(data: [u8; 32]) -> Self {
+        Self(data)
     }
 }
 
