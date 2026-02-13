@@ -14,7 +14,8 @@ use std::{
 };
 
 use crate::{
-    PlatformAttestation, QualifyingData, Response, VmInstanceRot,
+    QualifyingData, VmInstanceAttestResponse, VmInstanceAttestation,
+    VmInstanceRot,
     mock::{VmInstanceRotMock, VmInstanceRotMockError},
 };
 
@@ -61,7 +62,7 @@ impl VmInstanceRot for VmInstanceRotSocketClient {
     fn attest(
         &self,
         qualifying_data: &QualifyingData,
-    ) -> Result<PlatformAttestation, Self::Error> {
+    ) -> Result<VmInstanceAttestation, Self::Error> {
         let mut command = serde_json::to_string(&qualifying_data)?;
         command.push('\n');
         let command = command;
@@ -76,11 +77,14 @@ impl VmInstanceRot for VmInstanceRotSocketClient {
         reader.read_line(&mut response)?;
 
         debug!("got response: {response}");
-        // map `Response` to `Result<PlatformAttestation, Self::Error>`
-        let response: Response = serde_json::from_str(&response)?;
+        // map `VmInstanceAttestResponse` to `Result<PlatformAttestation, Self::Error>`
+        let response: VmInstanceAttestResponse =
+            serde_json::from_str(&response)?;
         match response {
-            Response::Success(p) => Ok(p),
-            Response::Error(e) => Err(Self::Error::VmInstanceRot(e)),
+            VmInstanceAttestResponse::Success(p) => Ok(p),
+            VmInstanceAttestResponse::Error(e) => {
+                Err(Self::Error::VmInstanceRot(e))
+            }
         }
     }
 }
@@ -102,7 +106,7 @@ pub enum VmInstanceRotSocketRunError {
     #[error("failed to deserialize QualifyingData request from JSON")]
     Request(serde_json::Error),
 
-    #[error("failed to serialize Response to JSON")]
+    #[error("failed to serialize response to JSON")]
     Response(#[from] serde_json::Error),
 
     #[error("error from the underlying socket")]
@@ -140,8 +144,9 @@ impl VmInstanceRotSocketServer {
                         "Error: Line length exceeded the limit of {} bytes.",
                         MAX_LINE_LENGTH
                     );
-                    let response =
-                        Response::Error("Request too long".to_string());
+                    let response = VmInstanceAttestResponse::Error(
+                        "Request too long".to_string(),
+                    );
                     let mut response = serde_json::to_string(&response)?;
                     response.push('\n');
                     debug!("sending error response: {response}");
@@ -158,7 +163,8 @@ impl VmInstanceRotSocketServer {
                 let qualifying_data = match result {
                     Ok(q) => q,
                     Err(e) => {
-                        let response = Response::Error(e.to_string());
+                        let response =
+                            VmInstanceAttestResponse::Error(e.to_string());
                         let mut response = serde_json::to_string(&response)?;
                         response.push('\n');
                         debug!("sending error response: {response}");
@@ -175,8 +181,8 @@ impl VmInstanceRotSocketServer {
                 // NOTE: We do not contribute to the `QualifyingData` here. The
                 // self.mock impl will handle this for us.
                 let response = match self.mock.attest(&qualifying_data) {
-                    Ok(a) => Response::Success(a),
-                    Err(e) => Response::Error(e.to_string()),
+                    Ok(a) => VmInstanceAttestResponse::Success(a),
+                    Err(e) => VmInstanceAttestResponse::Error(e.to_string()),
                 };
 
                 let mut response = serde_json::to_string(&response)?;
@@ -195,8 +201,8 @@ impl VmInstanceRotSocketServer {
 /// This enumeration represents the response message sent from one of the
 /// `VmInstanceTcpServer`
 #[derive(Debug, Deserialize, Serialize)]
-pub enum VmResponse {
-    Success(AttestedKey),
+pub enum VmInstanceAttestDataResponse {
+    Success(AttestedData),
     Error(String),
 }
 
@@ -257,8 +263,9 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
                         "Error: Line length exceeded the limit of {} bytes.",
                         MAX_LINE_LENGTH
                     );
-                    let response =
-                        Response::Error("Request too long".to_string());
+                    let response = VmInstanceAttestDataResponse::Error(
+                        "Request too long".to_string(),
+                    );
                     let mut response = serde_json::to_string(&response)?;
                     response.push('\n');
                     debug!("sending error response: {response}");
@@ -275,7 +282,8 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
                 let qdata_in = match result {
                     Ok(q) => q,
                     Err(e) => {
-                        let response = VmResponse::Error(e.to_string());
+                        let response =
+                            VmInstanceAttestDataResponse::Error(e.to_string());
                         let mut response = serde_json::to_string(&response)?;
                         response.push('\n');
                         debug!("sending error response: {response}");
@@ -289,45 +297,43 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
                 debug!("qualifying data decoded: {qdata_in:?}");
 
                 //   - generate `public_key`
-                let user_data = vec![1, 2, 3, 4];
+                let data = vec![1, 2, 3, 4];
 
                 // `QualifyingData` passed down to the next layer is the
                 // qualifying data from the caller combined with the data
                 // we've generated locally
                 let mut qdata_out = Sha256::new();
                 qdata_out.update(qdata_in);
-                qdata_out.update(&user_data);
+                qdata_out.update(&data);
                 let qdata_out = QualifyingData::from(Into::<[u8; 32]>::into(
                     qdata_out.finalize(),
                 ));
 
                 // get `attestation` from `VmInstanceRot` by passing the
                 // qualifying data generated above
-                let platform_attestation =
-                    match self.vm_instance_rot.attest(&qdata_out) {
-                        Ok(a) => a,
-                        Err(e) => {
-                            let response = VmResponse::Error(e.to_string());
-                            let mut response =
-                                serde_json::to_string(&response)?;
-                            response.push('\n');
-                            debug!("sending error response: {response}");
-                            reader
-                                .get_mut()
-                                .get_mut()
-                                .write_all(response.as_bytes())?;
-                            return Err(
-                                VmInstanceTcpServerError::VmInstanceRotError(e),
-                            );
-                        }
-                    };
-
-                let attested_key = AttestedKey {
-                    attestation: platform_attestation,
-                    public_key: user_data,
+                let attestation = match self.vm_instance_rot.attest(&qdata_out)
+                {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let response =
+                            VmInstanceAttestDataResponse::Error(e.to_string());
+                        let mut response = serde_json::to_string(&response)?;
+                        response.push('\n');
+                        debug!("sending error response: {response}");
+                        reader
+                            .get_mut()
+                            .get_mut()
+                            .write_all(response.as_bytes())?;
+                        return Err(
+                            VmInstanceTcpServerError::VmInstanceRotError(e),
+                        );
+                    }
                 };
 
-                let response = VmResponse::Success(attested_key);
+                let attested_data= AttestedData { attestation, data };
+
+                let response =
+                    VmInstanceAttestDataResponse::Success(attested_data);
 
                 //   - return `attestation` + `public_key`
                 let mut response = serde_json::to_string(&response)?;
@@ -344,9 +350,9 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct AttestedKey {
-    pub attestation: PlatformAttestation,
-    pub public_key: Vec<u8>,
+pub struct AttestedData {
+    pub attestation: VmInstanceAttestation,
+    pub data: Vec<u8>,
 }
 
 /// Possible errors from `VmInstanceAttestSocketServer::run`
@@ -374,11 +380,11 @@ impl VmInstanceTcp {
     }
 
     /// Send a nonce / `QualifyingData` to the `VmInstanceTcpServer`, get back
-    /// an `AttestedKey` that we deserialize from JSON.
-    pub fn attest_key(
+    /// an `AttestedData` that we deserialize from JSON.
+    pub fn attest_data(
         &mut self,
         qdata: &QualifyingData,
-    ) -> Result<AttestedKey, VmInstanceTcpError> {
+    ) -> Result<AttestedData, VmInstanceTcpError> {
         let mut qdata = serde_json::to_string(&qdata)?;
         qdata.push('\n');
         self.stream.write_all(qdata.as_bytes())?;
@@ -390,10 +396,13 @@ impl VmInstanceTcp {
         reader.read_line(&mut response)?;
         debug!("got attesetd key: {response}");
 
-        let response: VmResponse = serde_json::from_str(&response)?;
+        let response: VmInstanceAttestDataResponse =
+            serde_json::from_str(&response)?;
         match response {
-            VmResponse::Success(a) => Ok(a),
-            VmResponse::Error(e) => Err(VmInstanceTcpError::VmInstance(e)),
+            VmInstanceAttestDataResponse::Success(a) => Ok(a),
+            VmInstanceAttestDataResponse::Error(e) => {
+                Err(VmInstanceTcpError::VmInstance(e))
+            }
         }
     }
 }
