@@ -14,7 +14,8 @@ use uuid::Uuid;
 use x509_cert::der::Encode;
 
 use crate::{
-    MeasurementLog, PlatformAttestation, QualifyingData, RotType, VmInstanceRot,
+    MeasurementLog, QualifyingData, RotType, VmInstanceAttestation,
+    VmInstanceRot,
 };
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -72,7 +73,7 @@ impl VmInstanceRot for VmInstanceRotMock {
     fn attest(
         &self,
         qualifying_data: &QualifyingData,
-    ) -> Result<PlatformAttestation, Self::Error> {
+    ) -> Result<VmInstanceAttestation, Self::Error> {
         let instance_cfg = serde_json::to_string(&self.log)?;
 
         // Roll the VM config data (UUID & rootfs digest) into a digest with
@@ -120,7 +121,7 @@ impl VmInstanceRot for VmInstanceRotMock {
             cert_chain.push(cert.to_der()?);
         }
 
-        Ok(PlatformAttestation {
+        Ok(VmInstanceAttestation {
             attestation,
             cert_chain,
             measurement_logs,

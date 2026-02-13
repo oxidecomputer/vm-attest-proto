@@ -11,7 +11,8 @@ use std::{
 use vsock::{VsockListener, VsockStream};
 
 use crate::{
-    PlatformAttestation, QualifyingData, Response, VmInstanceRot,
+    QualifyingData, VmInstanceAttestResponse, VmInstanceAttestation,
+    VmInstanceRot,
     mock::{VmInstanceRotMock, VmInstanceRotMockError},
 };
 
@@ -72,8 +73,9 @@ impl VmInstanceRotVsockServer {
                         "Error: Line length exceeded the limit of {} bytes.",
                         MAX_LINE_LENGTH
                     );
-                    let response =
-                        Response::Error("Request too long".to_string());
+                    let response = VmInstanceAttestResponse::Error(
+                        "Request too long".to_string(),
+                    );
                     let mut response = serde_json::to_string(&response)?;
                     response.push('\n');
                     debug!("sending error response: {response}");
@@ -91,7 +93,8 @@ impl VmInstanceRotVsockServer {
                     Ok(q) => q,
                     Err(e) => {
                         // send error message to client, then map to error type
-                        let response = Response::Error(e.to_string());
+                        let response =
+                            VmInstanceAttestResponse::Error(e.to_string());
                         let mut response = serde_json::to_string(&response)?;
                         response.push('\n');
                         debug!("sending error response: {response}");
@@ -105,8 +108,8 @@ impl VmInstanceRotVsockServer {
 
                 debug!("qualifying data received: {qualifying_data:?}");
                 let response = match self.mock.attest(&qualifying_data) {
-                    Ok(a) => Response::Success(a),
-                    Err(e) => Response::Error(e.to_string()),
+                    Ok(a) => VmInstanceAttestResponse::Success(a),
+                    Err(e) => VmInstanceAttestResponse::Error(e.to_string()),
                 };
 
                 let mut response = serde_json::to_string(&response)?;
@@ -154,7 +157,7 @@ impl VmInstanceRot for VmInstanceRotVsockClient {
     fn attest(
         &self,
         qualifying_data: &QualifyingData,
-    ) -> Result<PlatformAttestation, Self::Error> {
+    ) -> Result<VmInstanceAttestation, Self::Error> {
         let mut command = serde_json::to_string(&qualifying_data)?;
         command.push('\n');
         let command = command;
@@ -170,10 +173,13 @@ impl VmInstanceRot for VmInstanceRotVsockClient {
 
         debug!("got response: {response}");
         // map response message to Result
-        let response: Response = serde_json::from_str(&response)?;
+        let response: VmInstanceAttestResponse =
+            serde_json::from_str(&response)?;
         match response {
-            Response::Success(p) => Ok(p),
-            Response::Error(e) => Err(Self::Error::VmInstanceRotError(e)),
+            VmInstanceAttestResponse::Success(p) => Ok(p),
+            VmInstanceAttestResponse::Error(e) => {
+                Err(Self::Error::VmInstanceRotError(e))
+            }
         }
     }
 }
