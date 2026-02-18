@@ -86,7 +86,7 @@ pub struct VmInstanceAttestation {
 /// `VmInstanceRot` in response to the `attest` function / message.
 #[derive(Debug, Deserialize, Serialize)]
 pub enum VmInstanceAttestResponse {
-    Success(VmInstanceAttestation),
+    Attestation(VmInstanceAttestation),
     Error(String),
 }
 
