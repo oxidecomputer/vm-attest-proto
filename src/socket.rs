@@ -81,7 +81,7 @@ impl VmInstanceRot for VmInstanceRotSocketClient {
         let response: VmInstanceAttestResponse =
             serde_json::from_str(&response)?;
         match response {
-            VmInstanceAttestResponse::Success(p) => Ok(p),
+            VmInstanceAttestResponse::Attestation(p) => Ok(p),
             VmInstanceAttestResponse::Error(e) => {
                 Err(Self::Error::VmInstanceRot(e))
             }
@@ -181,7 +181,7 @@ impl VmInstanceRotSocketServer {
                 // NOTE: We do not contribute to the `QualifyingData` here. The
                 // self.mock impl will handle this for us.
                 let response = match self.mock.attest(&qualifying_data) {
-                    Ok(a) => VmInstanceAttestResponse::Success(a),
+                    Ok(a) => VmInstanceAttestResponse::Attestation(a),
                     Err(e) => VmInstanceAttestResponse::Error(e.to_string()),
                 };
 
@@ -202,7 +202,7 @@ impl VmInstanceRotSocketServer {
 /// `VmInstanceTcpServer`
 #[derive(Debug, Deserialize, Serialize)]
 pub enum VmInstanceAttestDataResponse {
-    Success(AttestedData),
+    Attestation(AttestedData),
     Error(String),
 }
 
@@ -330,10 +330,10 @@ impl<T: VmInstanceRot> VmInstanceTcpServer<T> {
                     }
                 };
 
-                let attested_data= AttestedData { attestation, data };
+                let attested_data = AttestedData { attestation, data };
 
                 let response =
-                    VmInstanceAttestDataResponse::Success(attested_data);
+                    VmInstanceAttestDataResponse::Attestation(attested_data);
 
                 //   - return `attestation` + `public_key`
                 let mut response = serde_json::to_string(&response)?;
@@ -399,7 +399,7 @@ impl VmInstanceTcp {
         let response: VmInstanceAttestDataResponse =
             serde_json::from_str(&response)?;
         match response {
-            VmInstanceAttestDataResponse::Success(a) => Ok(a),
+            VmInstanceAttestDataResponse::Attestation(a) => Ok(a),
             VmInstanceAttestDataResponse::Error(e) => {
                 Err(VmInstanceTcpError::VmInstance(e))
             }

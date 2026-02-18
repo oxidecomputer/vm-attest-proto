@@ -108,7 +108,7 @@ impl VmInstanceRotVsockServer {
 
                 debug!("qualifying data received: {qualifying_data:?}");
                 let response = match self.mock.attest(&qualifying_data) {
-                    Ok(a) => VmInstanceAttestResponse::Success(a),
+                    Ok(a) => VmInstanceAttestResponse::Attestation(a),
                     Err(e) => VmInstanceAttestResponse::Error(e.to_string()),
                 };
 
@@ -176,7 +176,7 @@ impl VmInstanceRot for VmInstanceRotVsockClient {
         let response: VmInstanceAttestResponse =
             serde_json::from_str(&response)?;
         match response {
-            VmInstanceAttestResponse::Success(p) => Ok(p),
+            VmInstanceAttestResponse::Attestation(a) => Ok(a),
             VmInstanceAttestResponse::Error(e) => {
                 Err(Self::Error::VmInstanceRotError(e))
             }
