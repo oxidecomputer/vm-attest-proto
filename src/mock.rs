@@ -31,7 +31,7 @@ pub struct Measurement {
 pub struct VmInstanceConf {
     pub uuid: Uuid,
     #[serde(rename = "image-digest")]
-    pub image_digest: Measurement,
+    pub image_digest: Option<Measurement>,
 }
 
 /// Errors returned when trying to sign an attestation
