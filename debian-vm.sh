@@ -50,10 +50,16 @@ qemu-img create -f qcow2 "$QCOW_FILE" 2G
 
 sudo modprobe nbd
 
-# TODO: dynamically assign `nbd`
-sudo qemu-nbd -c /dev/nbd0 "$QCOW_FILE"
+# TODO: increment the integer part of the device name till we find an available
+# one?
+NBD_DEV=/dev/nbd0
+if /usr/sbin/nbd-client --check "$NBD_DEV"; then
+    >&2 echo "nbd device '$NBD_DEV' is in use"
+    exit 1
+fi
+sudo qemu-nbd -c "$NBD_DEV" "$QCOW_FILE"
 
-sudo parted -s -a optimal -- /dev/nbd0 \
+sudo parted -s -a optimal -- "$NBD_DEV" \
   mklabel gpt \
   mkpart primary fat32 1MiB 128MiB \
   mkpart primary ext4 128MiB -0 \
@@ -64,8 +70,8 @@ sudo parted -s -a optimal -- /dev/nbd0 \
 sudo mkfs -t fat -F 32 -n EFI /dev/nbd0p1
 sudo mkfs -t ext4 -L root /dev/nbd0p2
 
-ROOT_UUID=$(sudo blkid | grep '^/dev/nbd0' | grep ' LABEL="root" ' | grep -o ' UUID="[^"]\+"' | sed -e 's/^ //')
-EFI_UUID=$(sudo blkid | grep '^/dev/nbd0' | grep ' LABEL="EFI" ' | grep -o ' UUID="[^"]\+"' | sed -e 's/^ //')
+ROOT_UUID=$(sudo blkid | grep "^$NBD_DEV" | grep ' LABEL="root" ' | grep -o ' UUID="[^"]\+"' | sed -e 's/^ //')
+EFI_UUID=$(sudo blkid | grep "^$NBD_DEV" | grep ' LABEL="EFI" ' | grep -o ' UUID="[^"]\+"' | sed -e 's/^ //')
 
 BOOTSTRAP_ROOT="bootstrap-root"
 mkdir "$BOOTSTRAP_ROOT"
@@ -219,7 +225,7 @@ sudo fstrim -v "$BOOTSTRAP_ROOT"
 sudo umount "$EFI_ROOT" "$BOOTSTRAP_ROOT"
 rmdir "$BOOTSTRAP_ROOT"
 
-sudo qemu-nbd -d /dev/nbd0
+sudo qemu-nbd -d "$NBD_DEV"
 
 virt-sparsify --in-place "$QCOW_FILE"
 qemu-img convert -f qcow2 -O raw "$QCOW_FILE" "$NAME".raw
