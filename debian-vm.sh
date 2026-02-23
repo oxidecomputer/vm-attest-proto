@@ -11,12 +11,15 @@
 #     -serial mon:stdio \
 #     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
 #     -drive file=vm-instance.qcow2,if=virtio,readonly=on \
-#     -net nic,model=virtio-net-pci,macaddr=XX:XX:XX:XX:XX:XX \
+#     -net nic,model=virtio-net-pci,addr=0x3 \
 #     -net bridge,br=br0 \
 #     -device vhost-vsock-pci,guest-cid=3
 # ```
 #
-# Your environment will likely require fixups for file paths & network configuration
+# Your environment will likely require fixups for file paths
+# Network configuration in the VM depends on the 'virtio-net-pci' configuration
+# in the command above. By default 'virtio-net-pci' puts the device on bus 0,
+# slot 3 but the example command is intended to make this explicit.
 
 set -euo pipefail
 
@@ -27,13 +30,6 @@ fi
 
 NAME="$1"
 QCOW_FILE="$NAME".qcow2
-
-if [ $# -ne 2 ]; then
-    >&2 echo "macaddr assigned to VM is required"
-    exit 1
-fi
-
-MACADDR="$2"
 
 # assumes pwd is `vm-attest-proto` src dir
 cargo build
@@ -97,21 +93,13 @@ EOF
 [[ -d /boot/efi ]] || mkdir /boot/efi
 mount -a
 
-# TODO: accept macaddr as a parameter
-cat <<EOF > /etc/systemd/network/50-vm-eth.link
-[Match]
-MACAddress=$MACADDR
-
-[Link]
-Name=eth0
-EOF
-
+# cloud-init will find the network interface from metadata but we must source
+# the files from 'interfaces.d' to get debian to put them into effect
 cat <<EOF > /etc/network/interfaces
+source /etc/network/interfaces.d/*
+
 auto lo
 iface lo inet loopback
-
-allow-hotplug eth0
-iface eth0 inet dhcp
 EOF
 
 echo "vm-instance" > /etc/hostname
@@ -145,14 +133,13 @@ EOF
 
 # Stop anything overriding debconf's settings
 rm -f /etc/default/locale /etc/locale.gen /etc/default/keyboard
-DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes locales linux-image-amd64 grub-efi-amd64
+DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes locales linux-image-amd64 grub-efi-amd64 overlayroot cloud-init
 
 # Add console=ttyS0 so we get early boot messages on the serial console.
 sed -i -e 's/^\\(GRUB_CMDLINE_LINUX="[^"]*\\)"$/\\1 console=ttyS0"/' /etc/default/grub
 
-# install `overlayroot` to setup an `overlayfs` backed by `tmpfs` to make
+# configure 'overlayroot' to setup an 'overlayfs' backed by 'tmpfs' to make
 # using this image less painful
-DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes overlayroot
 cat <<EOF > /etc/overlayroot.conf
 overlayroot=tmpfs
 EOF
