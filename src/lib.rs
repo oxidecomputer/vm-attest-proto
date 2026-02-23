@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::{error, fmt};
+use uuid::Uuid;
 
 pub mod mock;
 pub mod socket;
@@ -55,6 +56,22 @@ pub enum RotType {
 pub struct MeasurementLog {
     pub rot: RotType,
     pub data: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct Measurement {
+    pub algorithm: String,
+    pub digest: String,
+}
+
+/// A representation of the measurement log produced by the VM instance RoT.
+/// This is the log of measurements that propolis mixes into the data provided
+/// to the attestation produced by the `RotType::OxidePlatform`.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct VmInstanceConf {
+    pub uuid: Uuid,
+    #[serde(rename = "image-digest")]
+    pub image_digest: Option<Measurement>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

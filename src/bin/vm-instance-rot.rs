@@ -11,8 +11,7 @@ use std::{fs, os::unix::net::UnixListener, path::PathBuf};
 use vsock::{VsockAddr, VsockListener};
 
 use vm_attest_trait::{
-    mock::{VmInstanceConf, VmInstanceRotMock},
-    socket::VmInstanceRotSocketServer,
+    VmInstanceConf, mock::VmInstanceRotMock, socket::VmInstanceRotSocketServer,
     vsock::VmInstanceRotVsockServer,
 };
 
