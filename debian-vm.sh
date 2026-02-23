@@ -48,7 +48,9 @@ done
 
 qemu-img create -f qcow2 "$QCOW_FILE" 2G
 
-sudo modprobe nbd
+if lsmod | awk '{print $2}' | grep '^nbd'; then
+    sudo modprobe nbd
+fi
 
 # TODO: increment the integer part of the device name till we find an available
 # one?
