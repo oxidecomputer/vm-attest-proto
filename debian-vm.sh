@@ -194,7 +194,7 @@ EOF
 systemctl enable vm-instance.service
 
 # done modifying the image / filesystems, configure fstab / mount to treat them
-# as `readonly`
+# as 'readonly'
 cat <<EOF > /etc/fstab
 $ROOT_UUID / ext4 defaults,ro 0 1
 $EFI_UUID /boot/efi vfat defaults,ro 0 1
