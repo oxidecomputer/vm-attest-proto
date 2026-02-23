@@ -206,3 +206,5 @@ rmdir "$BOOTSTRAP_ROOT"
 sudo qemu-nbd -d /dev/nbd0
 
 virt-sparsify --in-place "$QCOW_FILE"
+qemu-img convert -f qcow2 -O raw "$QCOW_FILE" "$NAME".raw
+gzip --stdout "$NAME".raw > "$NAME".raw.gz
