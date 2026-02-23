@@ -46,7 +46,7 @@ for BIN in $BINS; do
     fi
 done
 
-qemu-img create -f qcow2 "$QCOW_FILE" 10G
+qemu-img create -f qcow2 "$QCOW_FILE" 2G
 
 sudo modprobe nbd
 
@@ -55,8 +55,8 @@ sudo qemu-nbd -c /dev/nbd0 "$QCOW_FILE"
 
 sudo parted -s -a optimal -- /dev/nbd0 \
   mklabel gpt \
-  mkpart primary fat32 1MiB 256MiB \
-  mkpart primary ext4 256MiB -0 \
+  mkpart primary fat32 1MiB 128MiB \
+  mkpart primary ext4 128MiB -0 \
   name 1 uefi \
   name 2 root \
   set 1 esp on
