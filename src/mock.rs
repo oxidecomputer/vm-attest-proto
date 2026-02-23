@@ -8,31 +8,13 @@ use dice_verifier::{
     Attestation as OxAttestation, Log, Nonce,
 };
 use hubpack::SerializedSize;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 use x509_cert::der::Encode;
 
 use crate::{
     MeasurementLog, QualifyingData, RotType, VmInstanceAttestation,
-    VmInstanceRot,
+    VmInstanceConf, VmInstanceRot,
 };
-
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct Measurement {
-    pub algorithm: String,
-    pub digest: String,
-}
-
-/// A representation of the measurement log produced by the VM instance RoT.
-/// This is the log of measurements that propolis mixes into the data provided
-/// to the attestation produced by the `RotType::OxidePlatform`.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct VmInstanceConf {
-    pub uuid: Uuid,
-    #[serde(rename = "image-digest")]
-    pub image_digest: Option<Measurement>,
-}
 
 /// Errors returned when trying to sign an attestation
 #[derive(Debug, thiserror::Error)]
