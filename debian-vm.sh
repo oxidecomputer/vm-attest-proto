@@ -142,10 +142,26 @@ DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes locales linux-image-
 # Add console=ttyS0 so we get early boot messages on the serial console.
 sed -i -e 's/^\\(GRUB_CMDLINE_LINUX="[^"]*\\)"$/\\1 console=ttyS0"/' /etc/default/grub
 
+# install `overlayroot` to setup an `overlayfs` backed by `tmpfs` to make
+# using this image less painful
+DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes overlayroot
+cat <<EOF > /etc/overlayroot.conf
+overlayroot=tmpfs
+EOF
+
+# `overlayroot` requires this workaround to function properly on Debian 13
+# https://github.com/systemd/systemd/issues/39558#issuecomment-3556323130
+mkdir -p /etc/systemd/system.conf.d/
+cat <<EOF > /etc/systemd/system.conf.d/overlayfs.conf
+[Manager]
+DefaultEnvironment="LIBMOUNT_FORCE_MOUNT2=always"
+EOF
+
 # Tell GRUB to use the serial console
 cat - >>/etc/default/grub <<EOF
 GRUB_TERMINAL="serial"
 GRUB_SERIAL_COMMAND="serial --unit=0 --speed=9600 --stop=1"
+GRUB_CMDLINE_LINUX="overlayroot=tmpfs"
 EOF
 
 grub-install --target=x86_64-efi
@@ -177,8 +193,6 @@ EOF
 
 systemctl enable vm-instance.service
 
-# no fancy tmpfs / overlayfs stuff, just read-only rootfs
-# this produces a few errors on boot but none are fatal
 cat <<EOF > /etc/fstab
 $ROOT_UUID / ext4 defaults,ro 0 1
 $EFI_UUID /boot/efi vfat defaults 0 1
