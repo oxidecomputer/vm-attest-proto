@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 
 # This script uses `debootstrap` to create a qcow2 to host the in-VM parts of
-# this system. That requires that we install the `vm-instance` tool and
-# configure it to be run on boot.
+# this system. The disk produced by this script should be run under qemu with
+# a command like:
 #
-# The disk produced by this script should be run under qemu with a command like:
-#
-# qemu-system-x86_64 -enable-kvm \
+# ```shell
+# $ qemu-system-x86_64 -enable-kvm \
 #     -m 2G \
 #     -nographic \
 #     -serial mon:stdio \
@@ -15,6 +14,7 @@
 #     -net nic,model=virtio-net-pci,macaddr=XX:XX:XX:XX:XX:XX \
 #     -net bridge,br=br0 \
 #     -device vhost-vsock-pci,guest-cid=3
+# ```
 #
 # Your environment will likely require fixups for file paths & network configuration
 
