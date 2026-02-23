@@ -36,13 +36,15 @@ fi
 MACADDR="$2"
 
 # assumes pwd is `vm-attest-proto` src dir
-cargo build --bin vm-instance
+cargo build
 
-VM_INSTANCE_BIN=target/debug/vm-instance
-if [ ! -e "$VM_INSTANCE_BIN" ]; then
-    >&2 echo "missing required file: $VM_INSTANCE_BIN"
-    exit 1
-fi
+BINS="target/debug/vm-instance target/debug/appraiser"
+for BIN in $BINS; do
+    if [ ! -e "$BIN" ]; then
+        >&2 echo "missing required file: $BIN"
+        exit 1
+    fi
+done
 
 qemu-img create -f qcow2 "$QCOW_FILE" 10G
 
@@ -184,7 +186,9 @@ EOF
 
 EOS
 
-sudo cp "$VM_INSTANCE_BIN" "$BOOTSTRAP_ROOT"/usr/local/bin
+for BIN in $BINS; do
+    sudo cp "$BIN" "$BOOTSTRAP_ROOT"/usr/local/bin
+done
 
 MNTS="dev proc sys"
 for MNT in $MNTS; do
