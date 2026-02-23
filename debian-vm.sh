@@ -167,7 +167,7 @@ Description=A simple daemon service
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/vm-instance --retry --address "0.0.0.0:6666" vsock
+ExecStart=/usr/local/bin/vm-instance --verbose --retry --address "0.0.0.0:6666" vsock 3000
 Restart=always
 Type=simple
 
