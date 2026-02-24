@@ -3,6 +3,11 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use serde::{Deserialize, Serialize};
+use serde_with::{hex::Hex, serde_as};
+use sha2::{
+    Sha256,
+    digest::{core_api::OutputSizeUser, typenum::Unsigned},
+};
 use std::{error, fmt};
 use uuid::Uuid;
 
@@ -10,6 +15,9 @@ pub mod mock;
 pub mod socket;
 #[cfg(feature = "vsock")]
 pub mod vsock;
+
+const SHA256_DIGEST_LENGTH: usize =
+    <Sha256 as OutputSizeUser>::OutputSize::USIZE;
 
 /// User chosen value. Probably random data. Must not be reused.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -45,6 +53,18 @@ impl From<[u8; 32]> for QualifyingData {
     }
 }
 
+/// A measurement is a digest. This type represents a measurement with the
+/// digest algorithm represented by the variant with the digest in the
+/// associated data. When serializing the algorithm identifier must be one
+/// from the IANA Named Information Hash Algorithm Registry:
+/// https://www.iana.org/assignments/named-information/named-information.xhtml
+#[serde_as]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub enum Measurement {
+    #[serde(rename = "sha-256")]
+    Sha256(#[serde_as(as = "Hex")] [u8; SHA256_DIGEST_LENGTH]),
+}
+
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub enum RotType {
     OxidePlatform,
@@ -56,12 +76,6 @@ pub enum RotType {
 pub struct MeasurementLog {
     pub rot: RotType,
     pub data: Vec<u8>,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct Measurement {
-    pub algorithm: String,
-    pub digest: String,
 }
 
 /// A representation of the measurement log produced by the VM instance RoT.
