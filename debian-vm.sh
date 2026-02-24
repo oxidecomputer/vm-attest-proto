@@ -155,7 +155,7 @@ cat <<EOF > /etc/overlayroot.conf
 overlayroot=tmpfs
 EOF
 
-# `overlayroot` requires this workaround to function properly on Debian 13
+# 'overlayroot' requires this workaround to function properly on Debian 13
 # https://github.com/systemd/systemd/issues/39558#issuecomment-3556323130
 mkdir -p /etc/systemd/system.conf.d/
 cat <<EOF > /etc/systemd/system.conf.d/overlayfs.conf
