@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 
 # This script uses `debootstrap` to create a qcow2 to host the in-VM parts of
-# this system. The disk produced by this script should be run under qemu with
-# a command like:
+# this system. This VM configuration makes the boot disk read-only through
+# `fstab`. Further, it assumes that the block device hosting the boot disk will
+# not be writable. The later is accomplished by using `overlayroot` to set up
+# the `initramfs` to create a tmpfs / RAM disk as a writable `overlayfs` on top
+# of the boot disk.
+#
+# Configuration changes made by tools like `cloud-init` (network config,
+# hostname etc) will end up written to the overlayfs and will be lost when the
+# instance is restarted. `cloud-init` works well in a configuration like this
+# as all changes are reapplied on each boot.
+#
+# The disk produced by this script can be run under qemu with a
+# command like:
 #
 # ```shell
 # $ qemu-system-x86_64 -enable-kvm \
@@ -11,15 +22,12 @@
 #     -serial mon:stdio \
 #     -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
 #     -drive file=vm-instance.qcow2,if=virtio,readonly=on \
-#     -net nic,model=virtio-net-pci,addr=0x3 \
+#     -net nic,model=virtio-net-pci \
 #     -net bridge,br=br0 \
 #     -device vhost-vsock-pci,guest-cid=3
 # ```
 #
-# Your environment will likely require fixups for file paths
-# Network configuration in the VM depends on the 'virtio-net-pci' configuration
-# in the command above. By default 'virtio-net-pci' puts the device on bus 0,
-# slot 3 but the example command is intended to make this explicit.
+# NOTE: Your environment will likely require fixups for file paths.
 
 set -euo pipefail
 
